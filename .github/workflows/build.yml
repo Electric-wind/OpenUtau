@@ -1,5 +1,5 @@
-name: "feature: add note selection on play"
-run-name: "feature: add note selection on play"
+name: "feature: Add note selection on play"
+run-name: "feature: Add note selection on play"
 
 on:
   workflow_dispatch:
