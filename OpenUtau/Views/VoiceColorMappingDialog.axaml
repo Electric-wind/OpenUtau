@@ -32,7 +32,7 @@
         </StackPanel>
 
         <!-- Voice color column -->
-        <StackPanel Grid.Column="1" Margin="0,0,14,0" HorizontalAlignment="Center">
+        <StackPanel Grid.Column="1" Margin="0,0,14,0" HorizontalAlignment="Left">
           <TextBlock Text="{DynamicResource dialogs.voicecolorremapping}"
                      FontWeight="Bold"
                      HorizontalAlignment="Center"
@@ -43,7 +43,7 @@
                 <Grid Height="30">
                   <ComboBox ItemsSource="{Binding NewColors}"
                             SelectedIndex="{Binding ColorSelectedIndex}"
-                            HorizontalAlignment="Center"
+                            HorizontalAlignment="Left"
                             VerticalAlignment="Center" />
                 </Grid>
               </DataTemplate>
@@ -52,7 +52,7 @@
         </StackPanel>
 
         <!-- Resampler column -->
-        <StackPanel Grid.Column="2" HorizontalAlignment="Center">
+        <StackPanel Grid.Column="2" HorizontalAlignment="Left">
           <TextBlock Text="{DynamicResource prefs.rendering.resampler}"
                      FontWeight="Bold"
                      HorizontalAlignment="Center"
@@ -63,7 +63,7 @@
                 <Grid Height="30">
                   <ComboBox ItemsSource="{Binding Engines}"
                             SelectedIndex="{Binding EngineSelectedIndex}"
-                            HorizontalAlignment="Center"
+                            HorizontalAlignment="Left"
                             VerticalAlignment="Center" />
                 </Grid>
               </DataTemplate>
