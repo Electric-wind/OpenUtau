@@ -1751,7 +1751,8 @@ namespace OpenUtau.App.Views {
                 .Where(vpart => vpart.notes.Count > 0);
             if (parts.Any()) {
                 var dialog = new VoiceColorMappingDialog();
-                VoiceColorMappingViewModel vm = new VoiceColorMappingViewModel(oldColors, newColors, track.TrackName);
+                var resamplers = ToolsManager.Inst.Resamplers.Select(r => r.ToString()!).ToArray();
+                VoiceColorMappingViewModel vm = new VoiceColorMappingViewModel(oldColors, newColors, track.TrackName, resamplers);
                 dialog.DataContext = vm;
                 await dialog.ShowDialog(this);
 
@@ -1767,7 +1768,8 @@ namespace OpenUtau.App.Views {
                 .Where(vpart => vpart.notes.Count > 0);
             if (parts.Any()) {
                 var dialog = new VoiceColorMappingDialog();
-                VoiceColorMappingViewModel vm = new VoiceColorMappingViewModel(oldColors, newColors, track.TrackName);
+                var resamplers = ToolsManager.Inst.Resamplers.Select(r => r.ToString()!).ToArray();
+                VoiceColorMappingViewModel vm = new VoiceColorMappingViewModel(oldColors, newColors, track.TrackName, resamplers);
                 dialog.DataContext = vm;
                 dialog.onFinish = () => {
                     DocManager.Inst.StartUndoGroup("command.track.remapvc");
@@ -1780,22 +1782,61 @@ namespace OpenUtau.App.Views {
             }
         }
         void SetVoiceColorRemapping(UTrack track, IEnumerable<UVoicePart> parts, VoiceColorMappingViewModel vm) {
+            var project = DocManager.Inst.Project;
+            SyncEngDescriptorOptions(project, track);
+            track.TryGetExpDescriptor(project, Ustx.ENG, out var engDescriptor);
             foreach (var part in parts) {
                 foreach (var phoneme in part.phonemes) {
-                    var tuple = phoneme.GetExpression(DocManager.Inst.Project, track, Ustx.CLR);
-                    if (vm.ColorMappings.Any(m => m.OldIndex == tuple.Item1)) {
-                        var mapping = vm.ColorMappings.First(m => m.OldIndex == tuple.Item1);
-                        if (mapping.OldIndex != mapping.SelectedIndex) {
-                            if (mapping.SelectedIndex == 0) {
-                                DocManager.Inst.ExecuteCmd(new SetPhonemeExpressionCommand(DocManager.Inst.Project, track, part, phoneme, Ustx.CLR, null));
+                    var tuple = phoneme.GetExpression(project, track, Ustx.CLR);
+                    int oldClr = (int)tuple.Item1;
+                    var row = vm.MappingRows.FirstOrDefault(r => r.OldIndex == oldClr);
+                    if (row != null) {
+                        if (row.OldIndex != row.ColorSelectedIndex) {
+                            if (row.ColorSelectedIndex == 0) {
+                                DocManager.Inst.ExecuteCmd(new SetPhonemeExpressionCommand(project, track, part, phoneme, Ustx.CLR, null));
                             } else {
-                                DocManager.Inst.ExecuteCmd(new SetPhonemeExpressionCommand(DocManager.Inst.Project, track, part, phoneme, Ustx.CLR, mapping.SelectedIndex));
+                                DocManager.Inst.ExecuteCmd(new SetPhonemeExpressionCommand(project, track, part, phoneme, Ustx.CLR, row.ColorSelectedIndex));
+                            }
+                        }
+                        if (row.EngineSelectedIndex == 0) {
+                            DocManager.Inst.ExecuteCmd(new SetPhonemeExpressionCommand(project, track, part, phoneme, Ustx.ENG, null));
+                        } else {
+                            string engineName = row.Engines[row.EngineSelectedIndex];
+                            int engIndex = (engDescriptor?.options != null)
+                                ? Array.IndexOf(engDescriptor.options, engineName)
+                                : -1;
+                            if (engIndex >= 0) {
+                                DocManager.Inst.ExecuteCmd(new SetPhonemeExpressionCommand(project, track, part, phoneme, Ustx.ENG, engIndex));
                             }
                         }
                     } else {
-                        DocManager.Inst.ExecuteCmd(new SetPhonemeExpressionCommand(DocManager.Inst.Project, track, part, phoneme, Ustx.CLR, null));
+                        DocManager.Inst.ExecuteCmd(new SetPhonemeExpressionCommand(project, track, part, phoneme, Ustx.CLR, null));
                     }
                 }
+            }
+        }
+
+        static void SyncEngDescriptorOptions(UProject project, UTrack track) {
+            if (!track.TryGetExpDescriptor(project, Ustx.ENG, out var descriptor)) {
+                return;
+            }
+            var resamplers = ToolsManager.Inst.Resamplers.Select(r => r.ToString()!);
+            var completeOptions = new List<string> { "" };
+            completeOptions.AddRange(resamplers!);
+            bool needsUpdate = false;
+            if (descriptor.options == null || descriptor.options.Length != completeOptions.Count) {
+                needsUpdate = true;
+            } else {
+                for (int i = 0; i < completeOptions.Count; i++) {
+                    if (descriptor.options[i] != completeOptions[i]) {
+                        needsUpdate = true;
+                        break;
+                    }
+                }
+            }
+            if (needsUpdate) {
+                descriptor.options = completeOptions.ToArray();
+                descriptor.max = completeOptions.Count - 1;
             }
         }
 
