@@ -51,7 +51,7 @@ jobs:
 
       # Build
       - name: Restore
-        run: dotnet restore OpenUtau -r ${{ matrix.arch.rid }}
+        run: dotnet restore OpenUtau -r ${{ matrix.arch.rid }} || (sleep 10 && dotnet restore OpenUtau -r ${{ matrix.arch.rid }})
 
       - name: Build (Windows and Linux)
         run: dotnet publish OpenUtau -c Release -r ${{ matrix.arch.rid }} --self-contained true -o bin/${{ matrix.arch.name }}/
