@@ -2,12 +2,12 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-        mc:Ignorable="d" MinWidth="200" MinHeight="200" Width="520" Height="350"
+        mc:Ignorable="d" MinWidth="200" MinHeight="200" Width="480" Height="350"
         x:Class="OpenUtau.App.Views.VoiceColorMappingDialog"
         Icon="/Assets/open-utau.ico"
         Title="{DynamicResource dialogs.voicecolorremapping}"
         WindowStartupLocation="CenterOwner">
-  <Grid RowDefinitions="38,1*,30" Margin="10">
+  <Grid RowDefinitions="38,1*,30" Margin="10" Grid.IsSharedSizeScope="True">
     <StackPanel Grid.Row="0" >
       <TextBlock Text="{DynamicResource dialogs.voicecolorremapping.caption}" />
       <TextBlock Text="{Binding TrackName}" />
@@ -15,12 +15,18 @@
 
     <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
       <StackPanel HorizontalAlignment="Center">
-        <Grid ColumnDefinitions="140,170,170" Margin="0,0,0,2">
-          <TextBlock Grid.Column="0" Width="130" />
+        <Grid Margin="0,0,0,2">
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition SharedSizeGroup="NameColumn" />
+            <ColumnDefinition SharedSizeGroup="ColorColumn" />
+            <ColumnDefinition SharedSizeGroup="EngineColumn" />
+          </Grid.ColumnDefinitions>
+          <TextBlock Grid.Column="0" />
           <TextBlock Grid.Column="1"
                      Text="{DynamicResource dialogs.voicecolorremapping}"
                      FontWeight="Bold"
-                     HorizontalAlignment="Center" />
+                     HorizontalAlignment="Center"
+                     Margin="0,0,14,0" />
           <TextBlock Grid.Column="2"
                      Text="{DynamicResource prefs.rendering.resampler}"
                      FontWeight="Bold"
@@ -30,7 +36,12 @@
         <ItemsControl ItemsSource="{Binding MappingRows}">
           <ItemsControl.ItemTemplate>
             <DataTemplate>
-              <Grid ColumnDefinitions="140,170,170">
+              <Grid>
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition SharedSizeGroup="NameColumn" />
+                  <ColumnDefinition SharedSizeGroup="ColorColumn" />
+                  <ColumnDefinition SharedSizeGroup="EngineColumn" />
+                </Grid.ColumnDefinitions>
                 <TextBlock Text="{Binding Name}"
                            Grid.Column="0"
                            HorizontalAlignment="Right"
@@ -41,15 +52,13 @@
                           Grid.Column="1"
                           HorizontalAlignment="Left"
                           VerticalAlignment="Center"
-                          Margin="10,4,0,4"
-                          Width="160" />
+                          Margin="0,4,14,4" />
                 <ComboBox ItemsSource="{Binding Engines}"
                           SelectedIndex="{Binding EngineSelectedIndex}"
                           Grid.Column="2"
                           HorizontalAlignment="Left"
                           VerticalAlignment="Center"
-                          Margin="10,4,0,4"
-                          Width="160" />
+                          Margin="0,4,0,4" />
               </Grid>
             </DataTemplate>
           </ItemsControl.ItemTemplate>
