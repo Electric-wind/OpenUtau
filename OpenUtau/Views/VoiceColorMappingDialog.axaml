@@ -18,7 +18,12 @@
         <!-- Name column -->
         <StackPanel Grid.Column="0" Margin="0,0,10,0">
           <TextBlock FontWeight="Bold" Margin="0,0,0,2" />
-          <ItemsControl ItemsSource="{Binding MappingRows}">
+          <Grid Height="30">
+            <TextBlock Text="{Binding DefaultMappingRow.Name}"
+                       HorizontalAlignment="Right"
+                       VerticalAlignment="Center" />
+          </Grid>
+          <ItemsControl ItemsSource="{Binding NonDefaultMappingRows}">
             <ItemsControl.ItemTemplate>
               <DataTemplate>
                 <Grid Height="30">
@@ -33,11 +38,21 @@
 
         <!-- Voice color column -->
         <StackPanel Grid.Column="1" Margin="0,0,14,0" HorizontalAlignment="Left">
-          <TextBlock Text="{DynamicResource dialogs.voicecolorremapping}"
-                     FontWeight="Bold"
-                     HorizontalAlignment="Center"
-                     Margin="0,0,0,2" />
-          <ItemsControl ItemsSource="{Binding MappingRows}">
+          <Grid HorizontalAlignment="Left"
+                Width="{Binding Bounds.Width, ElementName=DefaultColorCombo}"
+                Margin="0,0,0,2">
+            <TextBlock Text="{DynamicResource dialogs.voicecolorremapping}"
+                       FontWeight="Bold"
+                       HorizontalAlignment="Center" />
+          </Grid>
+          <Grid Height="30">
+            <ComboBox x:Name="DefaultColorCombo"
+                      ItemsSource="{Binding DefaultMappingRow.NewColors}"
+                      SelectedIndex="{Binding DefaultMappingRow.ColorSelectedIndex}"
+                      HorizontalAlignment="Left"
+                      VerticalAlignment="Center" />
+          </Grid>
+          <ItemsControl ItemsSource="{Binding NonDefaultMappingRows}">
             <ItemsControl.ItemTemplate>
               <DataTemplate>
                 <Grid Height="30">
@@ -53,11 +68,21 @@
 
         <!-- Resampler column -->
         <StackPanel Grid.Column="2" HorizontalAlignment="Left">
-          <TextBlock Text="{DynamicResource prefs.rendering.resampler}"
-                     FontWeight="Bold"
-                     HorizontalAlignment="Center"
-                     Margin="0,0,0,2" />
-          <ItemsControl ItemsSource="{Binding MappingRows}">
+          <Grid HorizontalAlignment="Left"
+                Width="{Binding Bounds.Width, ElementName=DefaultEngineCombo}"
+                Margin="0,0,0,2">
+            <TextBlock Text="{DynamicResource prefs.rendering.resampler}"
+                       FontWeight="Bold"
+                       HorizontalAlignment="Center" />
+          </Grid>
+          <Grid Height="30">
+            <ComboBox x:Name="DefaultEngineCombo"
+                      ItemsSource="{Binding DefaultMappingRow.Engines}"
+                      SelectedIndex="{Binding DefaultMappingRow.EngineSelectedIndex}"
+                      HorizontalAlignment="Left"
+                      VerticalAlignment="Center" />
+          </Grid>
+          <ItemsControl ItemsSource="{Binding NonDefaultMappingRows}">
             <ItemsControl.ItemTemplate>
               <DataTemplate>
                 <Grid Height="30">

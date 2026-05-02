@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
 using DynamicData;
@@ -10,6 +11,9 @@ namespace OpenUtau.App.ViewModels {
         public ObservableCollection<ColorMapping> ColorMappings { get; set; } = new ObservableCollection<ColorMapping>();
         public ObservableCollection<EngineMapping> EngineMappings { get; set; } = new ObservableCollection<EngineMapping>();
         public ObservableCollection<VoiceColorMappingRow> MappingRows { get; set; } = new ObservableCollection<VoiceColorMappingRow>();
+
+        public VoiceColorMappingRow? DefaultMappingRow => MappingRows.FirstOrDefault();
+        public IEnumerable<VoiceColorMappingRow> NonDefaultMappingRows => MappingRows.Skip(1);
 
         public VoiceColorMappingViewModel(string[] oldColors, string[] newColors, string trackName, string[] resamplers) {
             var NewColors = new ObservableCollection<string>(newColors);
