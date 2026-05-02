@@ -18,7 +18,7 @@
         <!-- Name column -->
         <StackPanel Grid.Column="0" Margin="0,0,10,0">
           <TextBlock FontWeight="Bold" Margin="0,0,0,2" />
-          <Grid Height="30">
+          <Grid Height="28">
             <TextBlock Text="{Binding DefaultMappingRow.Name}"
                        HorizontalAlignment="Right"
                        VerticalAlignment="Center" />
@@ -26,7 +26,7 @@
           <ItemsControl ItemsSource="{Binding NonDefaultMappingRows}">
             <ItemsControl.ItemTemplate>
               <DataTemplate>
-                <Grid Height="30">
+                <Grid Height="28">
                   <TextBlock Text="{Binding Name}"
                              HorizontalAlignment="Right"
                              VerticalAlignment="Center" />
@@ -45,7 +45,7 @@
                        FontWeight="Bold"
                        HorizontalAlignment="Center" />
           </Grid>
-          <Grid Height="30">
+          <Grid Height="28">
             <ComboBox x:Name="DefaultColorCombo"
                       ItemsSource="{Binding DefaultMappingRow.NewColors}"
                       SelectedIndex="{Binding DefaultMappingRow.ColorSelectedIndex}"
@@ -55,7 +55,7 @@
           <ItemsControl ItemsSource="{Binding NonDefaultMappingRows}">
             <ItemsControl.ItemTemplate>
               <DataTemplate>
-                <Grid Height="30">
+                <Grid Height="28">
                   <ComboBox ItemsSource="{Binding NewColors}"
                             SelectedIndex="{Binding ColorSelectedIndex}"
                             HorizontalAlignment="Left"
@@ -75,7 +75,7 @@
                        FontWeight="Bold"
                        HorizontalAlignment="Center" />
           </Grid>
-          <Grid Height="30">
+          <Grid Height="28">
             <ComboBox x:Name="DefaultEngineCombo"
                       ItemsSource="{Binding DefaultMappingRow.Engines}"
                       SelectedIndex="{Binding DefaultMappingRow.EngineSelectedIndex}"
@@ -85,7 +85,7 @@
           <ItemsControl ItemsSource="{Binding NonDefaultMappingRows}">
             <ItemsControl.ItemTemplate>
               <DataTemplate>
-                <Grid Height="30">
+                <Grid Height="28">
                   <ComboBox ItemsSource="{Binding Engines}"
                             SelectedIndex="{Binding EngineSelectedIndex}"
                             HorizontalAlignment="Left"
