@@ -222,14 +222,14 @@ namespace OpenUtau.App.ViewModels {
                     Preferences.Default.PlayPosMarkerMargin = playPosMarkerMargin;
                     Preferences.Save();
                 });
-            this.WhenAnyValue(vm => vm.NoteSelectionOnPlay)
-                .Subscribe(val => {
-                    Preferences.Default.NoteSelectionOnPlay = val;
-                    Preferences.Save();
-                });
             this.WhenAnyValue(vm => vm.LockStartTime)
                 .Subscribe(lockStartTime => {
                     Preferences.Default.LockStartTime = lockStartTime;
+                    Preferences.Save();
+                });
+            this.WhenAnyValue(vm => vm.NoteSelectionOnPlay)
+                .Subscribe(noteSelectionOnPlay => {
+                    Preferences.Default.NoteSelectionOnPlay = noteSelectionOnPlay;
                     Preferences.Save();
                 });
             this.WhenAnyValue(vm => vm.InstallToAdditionalSingersPath)
