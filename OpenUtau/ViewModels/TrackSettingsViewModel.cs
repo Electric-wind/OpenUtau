@@ -19,6 +19,9 @@ namespace OpenUtau.App.ViewModels {
         [Reactive] public IWavtool? Wavtool { get; set; }
         [Reactive] public bool NeedsWavtool { get; set; }
         [Reactive] public bool IsNotClassic { get; set; }
+        [Reactive] public bool IsCustomServer { get; set; }
+        [Reactive] public string ServerUrl { get; set; } = "http://localhost:8000";
+        [Reactive] public string Endpoint { get; set; } = "/synthesize";
 
         ObservableCollectionExtended<IResampler> resamplers =
             new ObservableCollectionExtended<IResampler>();
@@ -49,6 +52,9 @@ namespace OpenUtau.App.ViewModels {
                 NeedsResampler = Renderers.CLASSIC == renderer;
                 NeedsWavtool = Renderers.CLASSIC == renderer;
                 IsNotClassic = Renderers.CLASSIC != renderer;
+                IsCustomServer = Renderers.CUSTOM_SERVER == renderer;
+                ServerUrl = Track.RendererSettings.serverUrl ?? Preferences.Default.DefaultServerUrl;
+                Endpoint = Track.RendererSettings.endpoint ?? Preferences.Default.DefaultEndpoint;
             }
             this.WhenAnyValue(x => x.Resampler)
                 .Subscribe(resampler => {
@@ -90,14 +96,27 @@ namespace OpenUtau.App.ViewModels {
             }
         }
 
-        public void Finish() {
-            if (Renderers.CLASSIC != Track.RendererSettings.renderer) {
-                return;
+        public void SetDefaultServer() {
+            if (!string.IsNullOrEmpty(ServerUrl)) {
+                Preferences.Default.DefaultServerUrl = ServerUrl;
             }
+            if (!string.IsNullOrEmpty(Endpoint)) {
+                Preferences.Default.DefaultEndpoint = Endpoint;
+            }
+            Preferences.Save();
+        }
+
+        public void Finish() {
             DocManager.Inst.StartUndoGroup("command.track.setting");
             var settings = Track.RendererSettings.Clone();
-            settings.resampler = Resampler?.ToString() ?? string.Empty;
-            settings.wavtool = Wavtool?.ToString() ?? string.Empty;
+            if (Renderers.CUSTOM_SERVER == Track.RendererSettings.renderer) {
+                settings.serverUrl = ServerUrl;
+                settings.endpoint = Endpoint;
+            }
+            if (Renderers.CLASSIC == Track.RendererSettings.renderer) {
+                settings.resampler = Resampler?.ToString() ?? string.Empty;
+                settings.wavtool = Wavtool?.ToString() ?? string.Empty;
+            }
             DocManager.Inst.ExecuteCmd(new TrackChangeRenderSettingCommand(DocManager.Inst.Project, Track, settings));
             DocManager.Inst.EndUndoGroup();
         }

@@ -157,6 +157,8 @@ namespace OpenUtau.Core.Util {
             public bool PreRender = true;
             public int NumRenderThreads = 2;
             public string DefaultRenderer = string.Empty;
+            public string DefaultServerUrl = "http://localhost:8000";
+            public string DefaultEndpoint = "/synthesize";
             public int WorldlineR = 0;
             public string OnnxRunner = string.Empty;
             public int OnnxGpu = 0;
