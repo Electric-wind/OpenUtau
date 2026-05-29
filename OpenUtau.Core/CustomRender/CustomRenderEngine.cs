@@ -197,6 +197,12 @@ namespace OpenUtau.Core.CustomRender {
                     double posMs = layout.positionMs - layout.leadingMs;
                     double durMs = layout.estimatedLengthMs;
                     request.sources[i] = new WaveSource(posMs, durMs, 0, 1);
+                    // 预填 Custom_Server 缓存，使播放开始前 WaveSource 已有 samples
+                    if (phrase.renderer is CustomServerRenderer
+                        && CustomServerRenderer.TryLoadCachedResult(phrase, out var cr)
+                        && cr.samples != null) {
+                        request.sources[i].SetSamples(cr.samples);
+                    }
                 }
                 request.mix = new WaveMix(request.sources);
             }
@@ -214,12 +220,25 @@ namespace OpenUtau.Core.CustomRender {
                 .SelectMany(req => req.phrases
                     .Zip(req.sources, (phrase, source) => Tuple.Create(phrase, source, req)))
                 .ToArray();
+
+            // 只渲染尚未有 samples 的 phrase（缓存预填的已跳过）
+            var renderTuples = tuples
+                .Where(t => !t.Item2.HasSamples)
+                .ToArray();
+
+            if (renderTuples.Length == 0) {
+                // 全部已缓存，直接通知 UI
+                foreach (var request in requests) {
+                    if (request.sources.All(s => s.HasSamples)) {
+                        request.part.SetMix(request.mix);
+                        DocManager.Inst.ExecuteCmd(new PartRenderedNotification(request.part));
+                    }
+                }
+                return;
+            }
             if (playing) {
-                // 按播放优先排序：
-                // 1) 播放位置及之后结束的片段优先（包含正在播放的片段）
-                // 2) 播放位置之前结束的片段排后面
-                // 两组内各自按 position 升序
-                Array.Sort(tuples, (a, b) => {
+                // 按播放优先排序
+                Array.Sort(renderTuples, (a, b) => {
                     bool aAfterStart = a.Item1.end > startTick;
                     bool bAfterStart = b.Item1.end > startTick;
                     if (aAfterStart != bAfterStart) {
@@ -228,10 +247,10 @@ namespace OpenUtau.Core.CustomRender {
                     return a.Item1.position.CompareTo(b.Item1.position);
                 });
             }
-            var progress = new Progress(tuples.Sum(t => t.Item1.phones.Length));
+            var progress = new Progress(renderTuples.Sum(t => t.Item1.phones.Length));
 
-            var phrases = tuples.Select(t => t.Item1).ToArray();
-            var sources = tuples.Select(t => t.Item2).ToArray();
+            var phrases = renderTuples.Select(t => t.Item1).ToArray();
+            var sources = renderTuples.Select(t => t.Item2).ToArray();
 
             var customRenderer = new CustomServerRenderer(serverUrl);
 
@@ -248,7 +267,7 @@ namespace OpenUtau.Core.CustomRender {
                     while (inProgress.Count < maxConcurrency && nextToStart < phrases.Length) {
                         int idx = nextToStart++;
                         var phrase = phrases[idx];
-                        var phraseRequest = tuples[idx].Item3;
+                        var phraseRequest = renderTuples[idx].Item3;
                         inProgress.Add(RenderOnePhrase(
                             idx, phrase, progress, phraseRequest, customRenderer, cancellation));
                     }
@@ -259,7 +278,7 @@ namespace OpenUtau.Core.CustomRender {
                     var (index, result) = await completed.ConfigureAwait(false);
                     sources[index].SetSamples(result.samples);
                     if (!cancellation.IsCancellationRequested) {
-                        var completedRequest = tuples[index].Item3;
+                        var completedRequest = renderTuples[index].Item3;
                         // Avoid clearing previously rendered waveform.
                         if (completedRequest.part.Mix == null || completedRequest.sources.Count(s => s.HasSamples) >= 3 || completedRequest.sources.All(s => s.HasSamples)) {
                             completedRequest.part.SetMix(completedRequest.mix);
@@ -275,15 +294,14 @@ namespace OpenUtau.Core.CustomRender {
                 for (int i = 0; i < phrases.Length; i++) {
                     int idx = i;
                     var phrase = phrases[idx];
-                    var phraseRequest = tuples[idx].Item3;
+                    var phraseRequest = renderTuples[idx].Item3;
 
                     tasks[idx] = Task.Run(async () => {
                         string? preJson = null;
                         bool needHttp = false;
 
                         if (phrase.renderer is CustomServerRenderer) {
-                            var wavPath = Path.Join(PathManager.Inst.CachePath,
-                                $"custom-{phrase.hash:x16}.wav");
+                            var wavPath = CustomServerRenderer.GetCacheWavPath(phrase);
                             if (!File.Exists(wavPath)) {
                                 preJson = CustomServerRenderer.ConvertPhraseToJson(phrase);
                                 needHttp = true;
@@ -309,7 +327,7 @@ namespace OpenUtau.Core.CustomRender {
                 var results = await Task.WhenAll(tasks).ConfigureAwait(false);
                 foreach (var (index, result) in results) {
                     sources[index].SetSamples(result.samples);
-                    var completedRequest = tuples[index].Item3;
+                    var completedRequest = renderTuples[index].Item3;
                     // Avoid clearing previously rendered waveform.
                     if (completedRequest.part.Mix == null || completedRequest.sources.Count(s => s.HasSamples) >= 3 || completedRequest.sources.All(s => s.HasSamples)) {
                         completedRequest.part.SetMix(completedRequest.mix);
@@ -331,8 +349,7 @@ namespace OpenUtau.Core.CustomRender {
 
             string? preJson = null;
             if (phrase.renderer is CustomServerRenderer) {
-                var wavPath = Path.Join(PathManager.Inst.CachePath,
-                    $"custom-{phrase.hash:x16}.wav");
+                var wavPath = CustomServerRenderer.GetCacheWavPath(phrase);
                 if (!File.Exists(wavPath)) {
                     preJson = CustomServerRenderer.ConvertPhraseToJson(phrase);
                 }

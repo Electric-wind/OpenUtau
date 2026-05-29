@@ -5,6 +5,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
+using System.Net.Sockets;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -38,7 +39,6 @@ namespace OpenUtau.Core.CustomRender {
 
         // hifiserver 自动启动相关
         private static readonly SemaphoreSlim _serverStartLock = new SemaphoreSlim(1, 1);
-        private static readonly HttpClient _healthHttpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(3) };
         private static Process? _launchedHifiserverProcess;
         private const int ServerStartTimeoutMs = 30000;
         private const int HealthPollIntervalMs = 500;
@@ -69,15 +69,44 @@ namespace OpenUtau.Core.CustomRender {
         }
 
         /// <summary>
-        /// 发送 HTTP GET 到服务端基地址，探测服务是否存活。
-        /// 只要收到任意 HTTP 响应（包括 404），就认为服务在监听。
+        /// 通过 TCP 连接探测服务端口是否在监听，不发送 HTTP 请求。
         /// </summary>
         private static async Task<bool> IsServerAliveAsync(string serverUrl) {
             try {
+                var uri = new Uri(serverUrl);
+                using var tcp = new TcpClient();
                 using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
-                var response = await _healthHttpClient.GetAsync(serverUrl, cts.Token).ConfigureAwait(false);
+                await tcp.ConnectAsync(uri.Host, uri.Port, cts.Token).ConfigureAwait(false);
                 return true;
             } catch {
+                return false;
+            }
+        }
+
+        internal static string GetCacheWavPath(RenderPhrase phrase) {
+            return Path.Join(PathManager.Inst.CachePath, $"custom-{phrase.hash:x16}.wav");
+        }
+
+        internal static bool TryLoadCachedResult(RenderPhrase phrase, out RenderResult result) {
+            result = new RenderResult() {
+                leadingMs = phrase.leadingMs,
+                positionMs = phrase.positionMs,
+                estimatedLengthMs = phrase.durationMs + phrase.leadingMs,
+            };
+            var wavPath = GetCacheWavPath(phrase);
+            phrase.AddCacheFile(wavPath);
+            if (!File.Exists(wavPath)) {
+                return false;
+            }
+            try {
+                using var waveStream = new WaveFileReader(wavPath);
+                result.samples = Wave.GetSamples(waveStream.ToSampleProvider().ToMono(1, 0));
+                if (result.samples != null) {
+                    Renderers.ApplyDynamics(phrase, result);
+                }
+                return result.samples != null;
+            } catch (Exception e) {
+                Log.Warning(e, "Failed to load Custom Server cache {WavPath}", wavPath);
                 return false;
             }
         }
@@ -251,73 +280,48 @@ namespace OpenUtau.Core.CustomRender {
         internal async Task<RenderResult> RenderImpl(RenderPhrase phrase, Progress progress, int trackNo,
             CancellationTokenSource cancellation, bool isPreRender, string? preGeneratedJson) {
             try {
+                // ===== 缓存优先：命中则直接返回，不探活、不启动服务、不显示进度 =====
+                if (TryLoadCachedResult(phrase, out var cachedResult)) {
+                    return cachedResult;
+                }
+
                 string progressInfo =
                     $"Track {trackNo + 1}: CustomServerRenderer \"{string.Join(" ", phrase.phones.Select(p => p.phoneme))}\"";
                 progress.Complete(0, progressInfo);
 
-                // ===== 渲染前确保 hifiserver 已启动（hash 锁外执行，避免阻塞其他 phrase） =====
+                // 缓存未命中 → 确保 hifiserver 就绪
                 var serverReady = await EnsureServerReadyAsync(ServerUrl).ConfigureAwait(false);
                 if (!serverReady) {
                     Log.Error("hifiserver is not available, using fallback rendering");
                     return FallbackRender(phrase);
                 }
 
-                var wavPath = Path.Join(PathManager.Inst.CachePath, $"custom-{phrase.hash:x16}.wav");
+                var wavPath = GetCacheWavPath(phrase);
                 phrase.AddCacheFile(wavPath);
-
                 var result = Layout(phrase);
 
-                // ===== 第一层检查：快速路径（无锁） =====
-                if (File.Exists(wavPath)) {
-                    using (var waveStream = new WaveFileReader(wavPath)) {
-                        result.samples = Wave.GetSamples(waveStream.ToSampleProvider().ToMono(1, 0));
-                    }
-
-                    if (result.samples != null) {
-                        Renderers.ApplyDynamics(phrase, result);
-                    }
-
-                    progress.Complete(phrase.phones.Length, progressInfo);
-                    return result;
-                }
-
-                // ===== 基于 hash 的互斥锁，防止并发重复提交相同内容 =====
+                // ===== hash 互斥锁，防止并发重复提交相同内容 =====
                 var hashLock = GetOrCreateHashLock(phrase.hash);
                 await hashLock.WaitAsync(cancellation.Token).ConfigureAwait(false);
                 try {
-                    // ===== 第二层检查：获取锁后再次检查缓存（double-check） =====
-                    if (File.Exists(wavPath)) {
-                        using (var waveStream = new WaveFileReader(wavPath)) {
-                            result.samples = Wave.GetSamples(waveStream.ToSampleProvider().ToMono(1, 0));
-                        }
-                        if (result.samples != null) {
-                            Renderers.ApplyDynamics(phrase, result);
-                        }
-                        progress.Complete(phrase.phones.Length, progressInfo);
-                        return result;
+                    // double-check：锁内再次检查缓存
+                    if (TryLoadCachedResult(phrase, out cachedResult)) {
+                        return cachedResult;
                     }
 
-                    // ===== 获取或创建进行中的 HTTP 任务 =====
-                    // 如果已有相同 hash 的 HTTP 任务在执行（例如上一次播放取消后仍在跑），
-                    // 直接等待该任务，不重复提交。
                     Task<byte[]?> httpTask;
                     if (_inFlightHttpTasks.TryGetValue(phrase.hash, out var existingTask)) {
                         httpTask = existingTask;
                         Log.Debug($"CustomServerRenderer reusing in-flight HTTP task for hash {phrase.hash:x16}");
                     } else {
                         var jsonData = preGeneratedJson ?? ConvertPhraseToJson(phrase);
-                        // 可选：将 JSON 写入文件
                         SaveJsonToFile(jsonData, phrase);
-                        // 使用 CancellationToken.None：即使播放被取消，HTTP 请求也继续完成，
-                        // 确保后端结果被缓存，避免下次播放重复提交。
                         httpTask = SendToServerAsync(jsonData, CancellationToken.None);
                         if (!_inFlightHttpTasks.TryAdd(phrase.hash, httpTask)) {
-                            // 竞态：另一个线程刚好也添加了，使用已有的
                             httpTask = _inFlightHttpTasks[phrase.hash];
                         }
                     }
 
-                    // 等待 HTTP 任务完成（可能被用户取消播放，但 HTTP 任务不受影响继续跑）
                     byte[]? wavData;
                     try {
                         wavData = await httpTask.ConfigureAwait(false);
@@ -327,16 +331,14 @@ namespace OpenUtau.Core.CustomRender {
 
                     if (wavData != null && wavData.Length > 0) {
                         File.WriteAllBytes(wavPath, wavData);
-                        using (var waveStream = new WaveFileReader(wavPath)) {
-                            result.samples = Wave.GetSamples(waveStream.ToSampleProvider().ToMono(1, 0));
+                        if (TryLoadCachedResult(phrase, out var loadedResult)) {
+                            progress.Complete(phrase.phones.Length, progressInfo);
+                            return loadedResult;
                         }
-                        if (result.samples != null) {
-                            Renderers.ApplyDynamics(phrase, result);
-                        }
-                    } else {
-                        Log.Warning("Server returned empty response, using fallback rendering");
-                        result = FallbackRender(phrase);
                     }
+
+                    Log.Warning("Server returned empty response, using fallback rendering");
+                    result = FallbackRender(phrase);
                 } finally {
                     hashLock.Release();
                 }
