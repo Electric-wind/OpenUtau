@@ -82,20 +82,45 @@ namespace OpenUtau.Core.CustomRender {
         }
 
         /// <summary>
-        /// 在 OpenUtau 可执行文件同级目录中查找 hifiserver 可执行文件。
-        /// 按优先级查找：hifiserver_dml.exe > hifiserver_cpu.exe > hifiserver*.exe
+        /// 在 OpenUtau 周围目录中查找 hifiserver 可执行文件。
+        /// 搜索顺序：BaseDirectory → 父目录 → 父父目录，每一层都扫描 hifiserver* 子目录。
+        /// exe 优先级：hifiserver_dml.exe > hifiserver_cpu.exe > hifiserver*.exe
         /// </summary>
         private static string? FindHifiserverExe() {
+            var exePatterns = new[] { "hifiserver_dml.exe", "hifiserver_cpu.exe", "hifiserver*.exe" };
+
+            var searchRoots = new List<string>();
             var baseDir = AppDomain.CurrentDomain.BaseDirectory;
-            Log.Debug($"Searching for hifiserver in: {baseDir}");
-            foreach (var dir in Directory.GetDirectories(baseDir, "hifiserver*")) {
-                foreach (var pattern in new[] { "hifiserver_dml.exe", "hifiserver_cpu.exe", "hifiserver*.exe" }) {
-                    foreach (var exe in Directory.GetFiles(dir, pattern, SearchOption.TopDirectoryOnly)) {
-                        Log.Information($"Found hifiserver: {exe}");
-                        return exe;
+            // 标准化路径，去掉尾部斜杠
+            baseDir = Path.GetFullPath(baseDir).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
+            searchRoots.Add(baseDir);
+            // 上一级目录 (例如从 net8.0-windows 到 Release)
+            var parent = Path.GetDirectoryName(baseDir);
+            if (parent != null) {
+                searchRoots.Add(parent);
+                // 再上一级 (例如从 Release 到 bin)
+                var grandParent = Path.GetDirectoryName(parent);
+                if (grandParent != null) {
+                    searchRoots.Add(grandParent);
+                }
+            }
+
+            Log.Debug($"Searching for hifiserver, roots: [{string.Join(", ", searchRoots)}]");
+
+            foreach (var root in searchRoots) {
+                if (!Directory.Exists(root)) continue;
+                foreach (var dir in Directory.GetDirectories(root, "hifiserver*")) {
+                    foreach (var pattern in exePatterns) {
+                        foreach (var exe in Directory.GetFiles(dir, pattern, SearchOption.TopDirectoryOnly)) {
+                            Log.Information($"Found hifiserver: {exe}");
+                            return exe;
+                        }
                     }
                 }
             }
+
+            Log.Error("Cannot find hifiserver executable. Place hifiserver folder next to OpenUtau.exe.");
             return null;
         }
 
@@ -180,6 +205,13 @@ namespace OpenUtau.Core.CustomRender {
                 string progressInfo =
                     $"Track {trackNo + 1}: CustomServerRenderer \"{string.Join(" ", phrase.phones.Select(p => p.phoneme))}\"";
                 progress.Complete(0, progressInfo);
+
+                // ===== 渲染前确保 hifiserver 已启动（hash 锁外执行，避免阻塞其他 phrase） =====
+                var serverReady = await EnsureServerReadyAsync(ServerUrl).ConfigureAwait(false);
+                if (!serverReady) {
+                    Log.Error("hifiserver is not available, using fallback rendering");
+                    return FallbackRender(phrase);
+                }
 
                 var wavPath = Path.Join(PathManager.Inst.CachePath, $"custom-{phrase.hash:x16}.wav");
                 phrase.AddCacheFile(wavPath);
@@ -449,16 +481,8 @@ namespace OpenUtau.Core.CustomRender {
         }
 
         private async Task<byte[]?> SendToServerAsync(string jsonData, CancellationToken cancellation) {
-            var fullUrl = GetFullUrl();
-
-            // 发送前确保服务就绪（内部有快速探活短路）
-            var serverReady = await EnsureServerReadyAsync(ServerUrl).ConfigureAwait(false);
-            if (!serverReady) {
-                Log.Error("hifiserver is not available, cannot send render request");
-                return null;
-            }
-
             try {
+                var fullUrl = GetFullUrl();
                 var content = new StringContent(jsonData, Encoding.UTF8, "application/json");
                 var response = await sharedHttpClient.PostAsync(fullUrl, content, cancellation).ConfigureAwait(false);
 
