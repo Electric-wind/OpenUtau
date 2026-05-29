@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
@@ -35,6 +36,12 @@ namespace OpenUtau.Core.CustomRender {
         private static readonly ConcurrentDictionary<ulong, Task<byte[]?>> _inFlightHttpTasks =
             new ConcurrentDictionary<ulong, Task<byte[]?>>();
 
+        // hifiserver 自动启动相关
+        private static readonly SemaphoreSlim _serverStartLock = new SemaphoreSlim(1, 1);
+        private static readonly HttpClient _healthHttpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(3) };
+        private const int ServerStartTimeoutMs = 30000;
+        private const int HealthPollIntervalMs = 500;
+
         public CustomServerRenderer() {
         }
 
@@ -58,6 +65,90 @@ namespace OpenUtau.Core.CustomRender {
 
         private string GetFullUrl() {
             return ServerUrl.TrimEnd('/') + '/' + Endpoint.TrimStart('/');
+        }
+
+        /// <summary>
+        /// 发送 HTTP GET 到服务端基地址，探测服务是否存活。
+        /// 只要收到任意 HTTP 响应（包括 404），就认为服务在监听。
+        /// </summary>
+        private static async Task<bool> IsServerAliveAsync(string serverUrl) {
+            try {
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+                var response = await _healthHttpClient.GetAsync(serverUrl, cts.Token).ConfigureAwait(false);
+                return true;
+            } catch {
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// 在 OpenUtau 可执行文件同级目录中查找 hifiserver 可执行文件。
+        /// 按优先级查找：hifiserver_dml.exe > hifiserver_cpu.exe > hifiserver*.exe
+        /// </summary>
+        private static string? FindHifiserverExe() {
+            var baseDir = AppDomain.CurrentDomain.BaseDirectory;
+            Log.Debug($"Searching for hifiserver in: {baseDir}");
+            foreach (var dir in Directory.GetDirectories(baseDir, "hifiserver*")) {
+                foreach (var pattern in new[] { "hifiserver_dml.exe", "hifiserver_cpu.exe", "hifiserver*.exe" }) {
+                    foreach (var exe in Directory.GetFiles(dir, pattern, SearchOption.TopDirectoryOnly)) {
+                        Log.Information($"Found hifiserver: {exe}");
+                        return exe;
+                    }
+                }
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// 确保 hifiserver 已启动并就绪。
+        /// 先快速探活，若不存活则加全局锁（防并发重复启动），
+        /// 二次探活后查找并启动进程，轮询等待最多 30 秒。
+        /// </summary>
+        private static async Task<bool> EnsureServerReadyAsync(string serverUrl) {
+            if (await IsServerAliveAsync(serverUrl).ConfigureAwait(false)) {
+                return true;
+            }
+
+            await _serverStartLock.WaitAsync().ConfigureAwait(false);
+            try {
+                if (await IsServerAliveAsync(serverUrl).ConfigureAwait(false)) {
+                    return true;
+                }
+
+                var exePath = FindHifiserverExe();
+                if (exePath == null) {
+                    Log.Error("Cannot find hifiserver executable. Place hifiserver folder next to OpenUtau.exe.");
+                    return false;
+                }
+
+                Log.Information($"Launching hifiserver: {exePath}");
+                try {
+                    var psi = new ProcessStartInfo {
+                        FileName = exePath,
+                        WorkingDirectory = Path.GetDirectoryName(exePath) ?? AppDomain.CurrentDomain.BaseDirectory,
+                        UseShellExecute = true,
+                        CreateNoWindow = false,
+                    };
+                    Process.Start(psi);
+                } catch (Exception ex) {
+                    Log.Error(ex, "Failed to launch hifiserver process");
+                    return false;
+                }
+
+                var deadline = Environment.TickCount64 + ServerStartTimeoutMs;
+                while (Environment.TickCount64 < deadline) {
+                    await Task.Delay(HealthPollIntervalMs).ConfigureAwait(false);
+                    if (await IsServerAliveAsync(serverUrl).ConfigureAwait(false)) {
+                        Log.Information("hifiserver is ready");
+                        return true;
+                    }
+                }
+
+                Log.Error($"hifiserver did not become ready within {ServerStartTimeoutMs}ms");
+                return false;
+            } finally {
+                _serverStartLock.Release();
+            }
         }
 
         public USingerType SingerType => USingerType.Classic;
@@ -358,10 +449,17 @@ namespace OpenUtau.Core.CustomRender {
         }
 
         private async Task<byte[]?> SendToServerAsync(string jsonData, CancellationToken cancellation) {
+            var fullUrl = GetFullUrl();
+
+            // 发送前确保服务就绪（内部有快速探活短路）
+            var serverReady = await EnsureServerReadyAsync(ServerUrl).ConfigureAwait(false);
+            if (!serverReady) {
+                Log.Error("hifiserver is not available, cannot send render request");
+                return null;
+            }
+
             try {
                 var content = new StringContent(jsonData, Encoding.UTF8, "application/json");
-
-                var fullUrl = GetFullUrl();
                 var response = await sharedHttpClient.PostAsync(fullUrl, content, cancellation).ConfigureAwait(false);
 
                 if (response.IsSuccessStatusCode) {
