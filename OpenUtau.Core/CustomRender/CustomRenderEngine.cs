@@ -226,6 +226,13 @@ namespace OpenUtau.Core.CustomRender {
                 .Where(t => !t.Item2.HasSamples)
                 .ToArray();
 
+            Log.Information(
+                "CustomRenderEngine RenderRequests: total={Total}, cached={Cached}, toRender={ToRender}, playing={Playing}",
+                tuples.Length,
+                tuples.Count(t => t.Item2.HasSamples),
+                renderTuples.Length,
+                playing);
+
             if (renderTuples.Length == 0) {
                 // 全部已缓存，直接通知 UI
                 foreach (var request in requests) {
@@ -252,8 +259,6 @@ namespace OpenUtau.Core.CustomRender {
             var phrases = renderTuples.Select(t => t.Item1).ToArray();
             var sources = renderTuples.Select(t => t.Item2).ToArray();
 
-            var customRenderer = new CustomServerRenderer(serverUrl);
-
             if (playing) {
                 // ===== 播放模式：按位置顺序排队渲染 =====
                 // 始终保持最多 maxConcurrency 个 HTTP 请求在执行，
@@ -269,7 +274,7 @@ namespace OpenUtau.Core.CustomRender {
                         var phrase = phrases[idx];
                         var phraseRequest = renderTuples[idx].Item3;
                         inProgress.Add(RenderOnePhrase(
-                            idx, phrase, progress, phraseRequest, customRenderer, cancellation));
+                            idx, phrase, progress, phraseRequest, cancellation));
                     }
 
                     // 等待任意一个完成（由于按顺序启动，通常靠前的先完成）
@@ -314,7 +319,7 @@ namespace OpenUtau.Core.CustomRender {
                         }
                         try {
                             return await RenderOnePhraseCore(
-                                idx, phrase, progress, phraseRequest, customRenderer,
+                                idx, phrase, progress, phraseRequest,
                                 cancellation, preJson).ConfigureAwait(false);
                         } finally {
                             if (needHttp) {
@@ -344,7 +349,7 @@ namespace OpenUtau.Core.CustomRender {
         /// </summary>
         private async Task<(int index, RenderResult result)> RenderOnePhrase(
             int idx, RenderPhrase phrase, Progress progress,
-            RenderPartRequest request, CustomServerRenderer customRenderer,
+            RenderPartRequest request,
             CancellationTokenSource cancellation) {
 
             string? preJson = null;
@@ -356,7 +361,7 @@ namespace OpenUtau.Core.CustomRender {
             }
 
             return await RenderOnePhraseCore(
-                idx, phrase, progress, request, customRenderer,
+                idx, phrase, progress, request,
                 cancellation, preJson).ConfigureAwait(false);
         }
 
@@ -365,12 +370,12 @@ namespace OpenUtau.Core.CustomRender {
         /// </summary>
         private static async Task<(int index, RenderResult result)> RenderOnePhraseCore(
             int idx, RenderPhrase phrase, Progress progress,
-            RenderPartRequest request, CustomServerRenderer customRenderer,
+            RenderPartRequest request,
             CancellationTokenSource cancellation, string? preJson) {
 
             RenderResult result;
-            if (phrase.renderer is CustomServerRenderer) {
-                result = await customRenderer.RenderImpl(
+            if (phrase.renderer is CustomServerRenderer phraseCustomRenderer) {
+                result = await phraseCustomRenderer.RenderImpl(
                     phrase, progress, request.trackNo, cancellation, false, preJson)
                     .ConfigureAwait(false);
             } else {

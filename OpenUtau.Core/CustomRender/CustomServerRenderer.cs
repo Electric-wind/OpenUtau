@@ -41,7 +41,21 @@ namespace OpenUtau.Core.CustomRender {
         private static readonly SemaphoreSlim _serverStartLock = new SemaphoreSlim(1, 1);
         private static Process? _launchedHifiserverProcess;
         private const int ServerStartTimeoutMs = 30000;
-        private const int HealthPollIntervalMs = 500;
+        private const int HealthPollIntervalMs = 250;
+
+        /// <summary>
+        /// 安全获取 CancellationToken，防止使用已 Dispose 的 CancellationTokenSource。
+        /// </summary>
+        private static CancellationToken GetSafeToken(CancellationTokenSource? source) {
+            if (source == null) {
+                return CancellationToken.None;
+            }
+            try {
+                return source.Token;
+            } catch (ObjectDisposedException) {
+                return CancellationToken.None;
+            }
+        }
 
         public CustomServerRenderer() {
         }
@@ -69,16 +83,37 @@ namespace OpenUtau.Core.CustomRender {
         }
 
         /// <summary>
-        /// 通过 TCP 连接探测服务端口是否在监听，不发送 HTTP 请求。
+        /// 通过 TCP 连接探测服务端口。Windows 上 localhost 可能解析到 ::1，
+        /// 而 hifiserver 监听 127.0.0.1，因此对 localhost 优先尝试 IPv4。
         /// </summary>
         private static async Task<bool> IsServerAliveAsync(string serverUrl) {
             try {
                 var uri = new Uri(serverUrl);
-                using var tcp = new TcpClient();
-                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
-                await tcp.ConnectAsync(uri.Host, uri.Port, cts.Token).ConfigureAwait(false);
-                return true;
-            } catch {
+                var port = uri.Port > 0 ? uri.Port : 80;
+
+                var hosts = new List<string>();
+                if (string.Equals(uri.Host, "localhost", StringComparison.OrdinalIgnoreCase)) {
+                    hosts.Add("127.0.0.1");
+                } else {
+                    hosts.Add(uri.Host);
+                }
+
+                foreach (var host in hosts) {
+                    try {
+                        using var tcp = new TcpClient(AddressFamily.InterNetwork);
+                        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(800));
+                        await tcp.ConnectAsync(host, port, cts.Token).ConfigureAwait(false);
+                        if (tcp.Connected) {
+                            Log.Debug("Custom server TCP probe OK at {Host}:{Port}", host, port);
+                            return true;
+                        }
+                    } catch (Exception ex) {
+                        Log.Debug(ex, "Custom server TCP probe failed at {Host}:{Port}", host, port);
+                    }
+                }
+                return false;
+            } catch (Exception ex) {
+                Log.Debug(ex, "Invalid custom server URL {ServerUrl}", serverUrl);
                 return false;
             }
         }
@@ -179,8 +214,11 @@ namespace OpenUtau.Core.CustomRender {
         /// 3. 加全局锁，查找 exe 并启动，轮询等待最多 30 秒。
         /// </summary>
         private static async Task<bool> EnsureServerReadyAsync(string serverUrl) {
-            // 第一层：HTTP 快速探活
+            Log.Debug("Checking custom server readiness at {ServerUrl}", serverUrl);
+
+            // 第一层：TCP 快速探活
             if (await IsServerAliveAsync(serverUrl).ConfigureAwait(false)) {
+                Log.Information("Custom server is ready at {ServerUrl}", serverUrl);
                 return true;
             }
 
@@ -285,6 +323,8 @@ namespace OpenUtau.Core.CustomRender {
                     return cachedResult;
                 }
 
+                var renderToken = GetSafeToken(cancellation);
+
                 string progressInfo =
                     $"Track {trackNo + 1}: CustomServerRenderer \"{string.Join(" ", phrase.phones.Select(p => p.phoneme))}\"";
                 progress.Complete(0, progressInfo);
@@ -292,7 +332,8 @@ namespace OpenUtau.Core.CustomRender {
                 // 缓存未命中 → 确保 hifiserver 就绪
                 var serverReady = await EnsureServerReadyAsync(ServerUrl).ConfigureAwait(false);
                 if (!serverReady) {
-                    Log.Error("hifiserver is not available, using fallback rendering");
+                    Log.Error("hifiserver is not available at {ServerUrl}; full endpoint would be {FullUrl}",
+                        ServerUrl, GetFullUrl());
                     return FallbackRender(phrase);
                 }
 
@@ -302,7 +343,7 @@ namespace OpenUtau.Core.CustomRender {
 
                 // ===== hash 互斥锁，防止并发重复提交相同内容 =====
                 var hashLock = GetOrCreateHashLock(phrase.hash);
-                await hashLock.WaitAsync(cancellation.Token).ConfigureAwait(false);
+                await hashLock.WaitAsync(renderToken).ConfigureAwait(false);
                 try {
                     // double-check：锁内再次检查缓存
                     if (TryLoadCachedResult(phrase, out cachedResult)) {
@@ -534,11 +575,16 @@ namespace OpenUtau.Core.CustomRender {
         private async Task<byte[]?> SendToServerAsync(string jsonData, CancellationToken cancellation) {
             try {
                 var fullUrl = GetFullUrl();
+                Log.Information("CustomServerRenderer POST {FullUrl}, json bytes={Length}",
+                    fullUrl, Encoding.UTF8.GetByteCount(jsonData));
                 var content = new StringContent(jsonData, Encoding.UTF8, "application/json");
                 var response = await sharedHttpClient.PostAsync(fullUrl, content, cancellation).ConfigureAwait(false);
 
+                Log.Information("CustomServerRenderer response {StatusCode}, bytes={Length}",
+                    response.StatusCode,
+                    response.Content.Headers.ContentLength ?? -1);
+
                 if (response.IsSuccessStatusCode) {
-                    Log.Debug($"CustomServerRenderer received {response.Content.Headers.ContentLength ?? 0} bytes");
                     return await response.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
                 } else {
                     var errorContent = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
@@ -546,7 +592,7 @@ namespace OpenUtau.Core.CustomRender {
                     return null;
                 }
             } catch (Exception e) {
-                Log.Error(e, "Failed to send data to server");
+                Log.Error(e, "CustomServerRenderer POST failed");
                 return null;
             }
         }
