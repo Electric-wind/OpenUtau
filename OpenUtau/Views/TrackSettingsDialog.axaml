@@ -30,14 +30,6 @@
         <Button Grid.Column="2" Content="{DynamicResource dialogs.tracksettings.setasdefault}"
                 HorizontalAlignment="Stretch" Command="{Binding SetDefaultWavtool}"/>
       </Grid>
-      <TextBlock Text="Server URL" IsVisible="{Binding IsCustomServer}"/>
-      <TextBox Text="{Binding ServerUrl}" IsVisible="{Binding IsCustomServer}"
-               Watermark="http://localhost:8000"/>
-      <TextBlock Text="Endpoint" IsVisible="{Binding IsCustomServer}"/>
-      <TextBox Text="{Binding Endpoint}" IsVisible="{Binding IsCustomServer}"
-               Watermark="/synthesize"/>
-      <Button Content="Set As Default" IsVisible="{Binding IsCustomServer}"
-              HorizontalAlignment="Stretch" Command="{Binding SetDefaultServer}"/>
       <Button Grid.Column="2" Content="{DynamicResource dialogs.messagebox.ok}"
               HorizontalAlignment="Stretch" Click="OnOkClicked"/>
     </StackPanel>

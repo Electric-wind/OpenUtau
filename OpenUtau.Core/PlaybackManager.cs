@@ -9,7 +9,7 @@ using NAudio.Wave.SampleProviders;
 using OpenUtau.Core.Render;
 using OpenUtau.Core.SignalChain;
 using OpenUtau.Core.Ustx;
-using OpenUtau.Core.CustomRender;
+
 using OpenUtau.Core.Util;
 using OpenUtau.Core.Format;
 using Serilog;
@@ -286,19 +286,11 @@ namespace OpenUtau.Core {
         private void Render(UProject project, int tick, int endTick, int trackNo) {
             Task.Run(() => {
                 try {
-                    if (CustomRenderEngine.ShouldUseCustomRenderEngine(project)) {
-                        var engine = new CustomRenderEngine(project, startTick: tick, endTick: endTick, trackNo: trackNo);
-                        var result = engine.RenderProject(DocManager.Inst.MainScheduler, ref renderCancellation);
-                        faders = result.Item2;
-                        StartingToPlay = false;
-                        StartPlayback(project.timeAxis.TickPosToMsPos(tick), result.Item1);
-                    } else {
-                        RenderEngine engine = new RenderEngine(project, startTick: tick, endTick: endTick, trackNo: trackNo);
-                        var result = engine.RenderProject(DocManager.Inst.MainScheduler, ref renderCancellation);
-                        faders = result.Item2;
-                        StartingToPlay = false;
-                        StartPlayback(project.timeAxis.TickPosToMsPos(tick), result.Item1);
-                    }
+                    RenderEngine engine = new RenderEngine(project, startTick: tick, endTick: endTick, trackNo: trackNo);
+                    var result = engine.RenderProject(DocManager.Inst.MainScheduler, ref renderCancellation);
+                    faders = result.Item2;
+                    StartingToPlay = false;
+                    StartPlayback(project.timeAxis.TickPosToMsPos(tick), result.Item1);
                 } catch (Exception e) {
                     Log.Error(e, "Failed to render.");
                     StopPlayback();
@@ -325,13 +317,8 @@ namespace OpenUtau.Core {
             await Task.Run(() => {
                 try {
                     WaveMix projectMix;
-                    if (CustomRenderEngine.ShouldUseCustomRenderEngine(project)) {
-                        var engine = new CustomRenderEngine(project);
-                        projectMix = engine.RenderMixdown(DocManager.Inst.MainScheduler, ref renderCancellation, wait: true).Item1;
-                    } else {
-                        RenderEngine engine = new RenderEngine(project);
-                        projectMix = engine.RenderMixdown(DocManager.Inst.MainScheduler, ref renderCancellation, wait: true).Item1;
-                    }
+                    RenderEngine engine = new RenderEngine(project);
+                    projectMix = engine.RenderMixdown(DocManager.Inst.MainScheduler, ref renderCancellation, wait: true).Item1;
                     DocManager.Inst.ExecuteCmd(new ProgressBarNotification(0, $"Exporting to {exportPath}."));
 
                     CheckFileWritable(exportPath);
@@ -355,13 +342,8 @@ namespace OpenUtau.Core {
                 string file = "";
                 try {
                     List<WaveMix> trackMixes;
-                    if (CustomRenderEngine.ShouldUseCustomRenderEngine(project)) {
-                        var engine = new CustomRenderEngine(project);
-                        trackMixes = engine.RenderTracks(DocManager.Inst.MainScheduler, ref renderCancellation);
-                    } else {
-                        RenderEngine engine = new RenderEngine(project);
-                        trackMixes = engine.RenderTracks(DocManager.Inst.MainScheduler, ref renderCancellation);
-                    }
+                    RenderEngine engine = new RenderEngine(project);
+                    trackMixes = engine.RenderTracks(DocManager.Inst.MainScheduler, ref renderCancellation);
                     for (int i = 0; i < trackMixes.Count; ++i) {
                         if (trackMixes[i] == null || i >= project.tracks.Count || project.tracks[i].Muted) {
                             continue;
@@ -396,13 +378,8 @@ namespace OpenUtau.Core {
 
         void SchedulePreRender() {
             Log.Information("SchedulePreRender");
-            if (CustomRenderEngine.ShouldUseCustomRenderEngine(DocManager.Inst.Project)) {
-                var engine = new CustomRenderEngine(DocManager.Inst.Project);
-                engine.PreRenderProject(ref renderCancellation);
-            } else {
-                var engine = new RenderEngine(DocManager.Inst.Project);
-                engine.PreRenderProject(ref renderCancellation);
-            }
+            var engine = new RenderEngine(DocManager.Inst.Project);
+            engine.PreRenderProject(ref renderCancellation);
         }
 
         #region ICmdSubscriber

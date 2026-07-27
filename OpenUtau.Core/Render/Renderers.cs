@@ -15,9 +15,10 @@ namespace OpenUtau.Core.Render {
         public const string VOGEN = "VOGEN";
         public const string DIFFSINGER = "DIFFSINGER";
         public const string VOICEVOX = "VOICEVOX";
-        public const string CUSTOM_SERVER = "CUSTOM_SERVER";
+        public const string HIFIUTAU = "HIFIUTAU";
+        public const string HIFIUTAU_DEFAULT_MODEL = "hifiutau-pc-nsf-hifigan";
 
-        static readonly string[] classicRenderers = new[] { WORLDLINE_R, CLASSIC, CUSTOM_SERVER };
+        static readonly string[] classicRenderers = new[] { WORLDLINE_R, CLASSIC, HIFIUTAU };
         static readonly string[] enunuRenderers = new[] { ENUNU };
         static readonly string[] vogenRenderers = new[] { VOGEN };
         static readonly string[] diffSingerRenderers = new[] { DIFFSINGER };
@@ -45,24 +46,17 @@ namespace OpenUtau.Core.Render {
             return new List<string> {
                 "WORLDLINE-R",
                 "Classic",
-                "Custom Server"
+                "HiFiUTAU"
             };
         }
 
         public static string GetDefaultRenderer(USingerType singerType) {
             if (singerType == USingerType.Classic) {
-                var defaultRenderer = Preferences.Default.DefaultRenderer;
-                if (string.IsNullOrEmpty(defaultRenderer)) {
-                    return WORLDLINE_R;
-                }
-                switch (defaultRenderer) {
-                    case "Classic":
-                        return CLASSIC;
-                    case "Custom Server":
-                        return CUSTOM_SERVER;
-                    default:
-                        return WORLDLINE_R;
-                }
+                return Preferences.Default.DefaultRenderer switch {
+                    "Classic" => CLASSIC,
+                    "HiFiUTAU" => HIFIUTAU,
+                    _ => GetSupportedRenderers(singerType)[0],
+                };
             }
             return GetSupportedRenderers(singerType)[0];
         }
@@ -82,8 +76,8 @@ namespace OpenUtau.Core.Render {
                 return new DiffSinger.DiffSingerRenderer();
             } else if (renderer == VOICEVOX) {
                 return new Voicevox.VoicevoxRenderer();
-            } else if (renderer == CUSTOM_SERVER) {
-                return new CustomRender.CustomServerRenderer();
+            } else if (renderer == HIFIUTAU) {
+                return new HiFiUtau.HiFiUtauRenderer();
             }
             return null;
         }

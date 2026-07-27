@@ -12,6 +12,8 @@ namespace OpenUtau.Core.Ustx {
         public string renderer;
         public string resampler;
         public string wavtool;
+        // Legacy Custom Server fields — retained for backward-compatible deserialization
+        // but no longer used by HiFiUTAU or any active renderer.
         public string serverUrl;
         public string endpoint;
 
@@ -34,18 +36,6 @@ namespace OpenUtau.Core.Ustx {
             }
             if (renderer != Renderer?.ToString()) {
                 Renderer = Renderers.CreateRenderer(renderer);
-            }
-            if (renderer == Renderers.CUSTOM_SERVER) {
-                if (string.IsNullOrEmpty(serverUrl)) {
-                    serverUrl = Util.Preferences.Default.DefaultServerUrl;
-                }
-                if (string.IsNullOrEmpty(endpoint)) {
-                    endpoint = Util.Preferences.Default.DefaultEndpoint;
-                }
-                if (Renderer is CustomRender.CustomServerRenderer customServerRenderer) {
-                    customServerRenderer.ServerUrl = serverUrl;
-                    customServerRenderer.Endpoint = endpoint;
-                }
             }
             if (renderer == Renderers.CLASSIC) {
                 if (string.IsNullOrEmpty(resampler)) {
