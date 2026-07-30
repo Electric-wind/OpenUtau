@@ -349,6 +349,57 @@ namespace OpenUtau.Core.HiFiUtau {
             return result;
         }
 
+        /// <summary>
+        /// Loop-mode mel resample. Reflect-padded vowel is walked at 1:1 speed,
+        /// matching hifisampler He flag behaviour. Fallback to mild compression
+        /// only when padded vowel is still shorter than target vowel duration.
+        /// </summary>
+        public static float[,] ResamplePhoneMelLoop(float[,] mel, int totalFrames, int conFramesOrig, int targetConFrames, int vowFramesOrig, double stretch) {
+            int bins = mel.GetLength(0);
+            int frames = mel.GetLength(1);
+            totalFrames = Math.Max(1, totalFrames);
+            targetConFrames = Math.Clamp(targetConFrames, 0, totalFrames - 1);
+            if (bins == 0 || frames == 0) {
+                return new float[bins, totalFrames];
+            }
+            var result = new float[bins, totalFrames];
+            int targetVowFrames = Math.Max(1, totalFrames - targetConFrames);
+
+            // Consonant: normal stretch (t / stretch)
+            for (int t = 0; t < targetConFrames; t++) {
+                double src = t / stretch;
+                src = Math.Clamp(src, 0, conFramesOrig - 1);
+                int i0 = (int)Math.Floor(src);
+                int i1 = Math.Min(conFramesOrig - 1, i0 + 1);
+                float frac = (float)(src - i0);
+                for (int b = 0; b < bins; b++) {
+                    result[b, t] = mel[b, i0] + (mel[b, i1] - mel[b, i0]) * frac;
+                }
+            }
+
+            // Vowel: walk at speed 1 through reflect-padded mel
+            // When vowFramesOrig >= targetVowFrames, each target frame maps 1:1 to source.
+            // This naturally loops through the reflect-padded vowel pattern.
+            for (int t = targetConFrames; t < totalFrames; t++) {
+                double vowelOffset = (double)(t - targetConFrames);
+                double src;
+                if (vowFramesOrig >= targetVowFrames) {
+                    src = conFramesOrig + vowelOffset;
+                } else {
+                    double ratio = (double)vowFramesOrig / targetVowFrames;
+                    src = conFramesOrig + vowelOffset * ratio;
+                }
+                src = Math.Clamp(src, conFramesOrig, frames - 1);
+                int i0 = (int)Math.Floor(src);
+                int i1 = Math.Min(frames - 1, i0 + 1);
+                float frac = (float)(src - i0);
+                for (int b = 0; b < bins; b++) {
+                    result[b, t] = mel[b, i0] + (mel[b, i1] - mel[b, i0]) * frac;
+                }
+            }
+            return result;
+        }
+
         static float[] ReadAll(ISampleProvider provider) {
             var samples = new System.Collections.Generic.List<float>();
             var buffer = new float[Math.Max(1024, provider.WaveFormat.SampleRate)];

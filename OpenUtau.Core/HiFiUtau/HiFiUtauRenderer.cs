@@ -306,28 +306,21 @@ namespace OpenUtau.Core.HiFiUtau {
             targetConFrames = Math.Min(targetConFrames, Math.Max(1, totalFrames - 1));
             int targetVowFrames = Math.Max(0, totalFrames - targetConFrames);
 
-            if (phone.StretchMode == (int)StretchMode.Loop && vowFramesOrig > 1 && targetVowFrames > vowFramesOrig * 1.5) {
-                melFull = HiFiUtauMath.ReflectPadVowel(
-                    melFull,
-                    conFramesOrig,
-                    targetVowFrames - vowFramesOrig + Math.Min(4, vowFramesOrig / 2));
+            // Loop mode (stm=loop): reflect-pad the vowel segment so the
+            // downstream resampler can walk through it at 1:1 speed, matching
+            // the hifisampler He flag behaviour. The padded mel is used as
+            // source material; ResamplePhoneMelLoop traverses it linearly
+            // per target frame instead of compressing it into the target duration.
+            if (phone.StretchMode == (int)StretchMode.Loop && vowFramesOrig > 1) {
+                int padFrames = targetVowFrames - vowFramesOrig + Math.Max(2, Math.Min(8, vowFramesOrig / 4));
+                melFull = HiFiUtauMath.ReflectPadVowel(melFull, conFramesOrig, padFrames);
                 nFrames = melFull.GetLength(1);
                 vowFramesOrig = nFrames - conFramesOrig;
             }
 
-            var melOut = HiFiUtauMath.ResamplePhoneMel(
-                melFull,
-                totalFrames,
-                conFramesOrig,
-                targetConFrames,
-                vowFramesOrig,
-                stretch);
-
-            // strt=1 (loop): normalize vowel energy to linear gradient
-            if (phone.StretchMode == (int)StretchMode.Loop && targetVowFrames > 1 &&
-                melOut.GetLength(1) >= targetConFrames + 2) {
-                HiFiUtauMath.NormalizeLoopVowelEnergy(melOut, targetConFrames);
-            }
+            var melOut = phone.StretchMode == (int)StretchMode.Loop
+                ? HiFiUtauMath.ResamplePhoneMelLoop(melFull, totalFrames, conFramesOrig, targetConFrames, vowFramesOrig, stretch)
+                : HiFiUtauMath.ResamplePhoneMel(melFull, totalFrames, conFramesOrig, targetConFrames, vowFramesOrig, stretch);
 
             if (preToLeftMs > 0) {
                 int leftCutFrames = (int)(preToLeftMs / config.MsPerFeatureFrame);
