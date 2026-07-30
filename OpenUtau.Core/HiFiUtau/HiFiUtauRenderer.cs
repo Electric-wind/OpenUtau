@@ -151,6 +151,7 @@ namespace OpenUtau.Core.HiFiUtau {
         static ulong ComputeRawHash(RenderPhrase phrase) {
             using var stream = new MemoryStream();
             using (var writer = new BinaryWriter(stream)) {
+                writer.Write("hifiutau-loop-v2-direct-centers");
                 writer.Write(phrase.preEffectHash);
                 WriteCurve(writer, phrase.pitches);
                 WriteCurve(writer, phrase.gender);
@@ -306,21 +307,49 @@ namespace OpenUtau.Core.HiFiUtau {
             targetConFrames = Math.Min(targetConFrames, Math.Max(1, totalFrames - 1));
             int targetVowFrames = Math.Max(0, totalFrames - targetConFrames);
 
-            // Loop mode (stm=loop): reflect-pad the vowel segment so the
-            // downstream resampler can walk through it at 1:1 speed, matching
-            // the hifisampler He flag behaviour. The padded mel is used as
-            // source material; ResamplePhoneMelLoop traverses it linearly
-            // per target frame instead of compressing it into the target duration.
+            // Loop mode (stm=loop): direct time-warped mel extraction matching
+            // HiFiUTAU-engine FragmentMel._process_single_phoneme. For each target
+            // frame, the source sample center is computed via a triangular-wave
+            // mapping that bounces between oto_consonant and oto_end, creating a
+            // smooth loop. Mel is then extracted directly at those warped positions.
             if (phone.StretchMode == (int)StretchMode.Loop && vowFramesOrig > 1) {
-                int padFrames = targetVowFrames - vowFramesOrig + Math.Max(2, Math.Min(8, vowFramesOrig / 4));
-                melFull = HiFiUtauMath.ReflectPadVowel(melFull, conFramesOrig, padFrames);
-                nFrames = melFull.GetLength(1);
-                vowFramesOrig = nFrames - conFramesOrig;
+                double targetConSamples = (double)targetConFrames * config.FeatureHop;
+                double loopLenSamples = (double)(endSample - consonantSample);
+                loopLenSamples = Math.Max(config.FeatureHop, loopLenSamples);
+
+                var srcCenters = new double[totalFrames];
+                for (int t = 0; t < totalFrames; t++) {
+                    double pos = (double)t * config.FeatureHop;
+                    double src;
+                    if (pos < targetConSamples) {
+                        src = (double)consonantSample - (targetConSamples - pos) / stretch;
+                    } else {
+                        double loopPos = (pos - targetConSamples) % (2.0 * loopLenSamples);
+                        src = (double)endSample - Math.Abs(loopPos - loopLenSamples);
+                    }
+                    srcCenters[t] = src;
+                }
+
+                var melLoop = melExtractor.Extract(audio, srcCenters);
+                if (melLoop.GetLength(1) == 0) {
+                    return new float[config.NumMels, 0];
+                }
+
+                if (targetConFrames > 1 && melLoop.GetLength(1) > 1) {
+                    HiFiUtauMath.NormalizeLoopConsonantEnergy(melLoop, targetConFrames);
+                }
+
+                if (preToLeftMs > 0) {
+                    int leftCutFrames = (int)(preToLeftMs / config.MsPerFeatureFrame);
+                    melLoop = HiFiUtauMath.SliceMel(melLoop, Math.Min(leftCutFrames, melLoop.GetLength(1)), melLoop.GetLength(1));
+                } else if (preToLeftMs < 0) {
+                    int leftPadFrames = (int)(-preToLeftMs / config.MsPerFeatureFrame);
+                    melLoop = HiFiUtauMath.PadBlankLeftFadeIn(melLoop, leftPadFrames);
+                }
+                return melLoop;
             }
 
-            var melOut = phone.StretchMode == (int)StretchMode.Loop
-                ? HiFiUtauMath.ResamplePhoneMelLoop(melFull, totalFrames, conFramesOrig, targetConFrames, vowFramesOrig, stretch)
-                : HiFiUtauMath.ResamplePhoneMel(melFull, totalFrames, conFramesOrig, targetConFrames, vowFramesOrig, stretch);
+            var melOut = HiFiUtauMath.ResamplePhoneMel(melFull, totalFrames, conFramesOrig, targetConFrames, vowFramesOrig, stretch);
 
             if (preToLeftMs > 0) {
                 int leftCutFrames = (int)(preToLeftMs / config.MsPerFeatureFrame);

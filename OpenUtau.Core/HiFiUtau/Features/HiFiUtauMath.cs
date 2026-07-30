@@ -237,40 +237,65 @@ namespace OpenUtau.Core.HiFiUtau {
         }
 
         /// <summary>
-        /// For strt=1 (loop) mode: normalize vowel frame energy to a linear gradient
-        /// from first to last frame, eliminating energy fluctuations caused by
-        /// the triangular wave looping. Matching Python Fragment's strt=1 energy normalization.
+        /// For strt=1 (loop) mode: normalize consonant frame energy to a linear
+        /// gradient matching FragmentMel._process_single_phoneme behaviour.
         /// </summary>
-        public static void NormalizeLoopVowelEnergy(float[,] mel, int consonantFrames) {
+        public static void NormalizeLoopConsonantEnergy(float[,] mel, int consonantFrames) {
             int bins = mel.GetLength(0);
             int totalFrames = mel.GetLength(1);
-            int vowelFrames = totalFrames - consonantFrames;
-            if (vowelFrames <= 1 || totalFrames < consonantFrames + 2) {
+            if (consonantFrames <= 1 || totalFrames <= 1) {
                 return;
             }
-            // Compute frame energy for vowel part
-            var frameEnergy = new double[vowelFrames];
-            for (int t = 0; t < vowelFrames; t++) {
+            consonantFrames = Math.Min(consonantFrames, totalFrames);
+            var frameEnergy = new double[consonantFrames];
+            for (int t = 0; t < consonantFrames; t++) {
                 double sum = 0;
                 for (int b = 0; b < bins; b++) {
-                    double v = Math.Exp(mel[b, consonantFrames + t]);
-                    sum += v;
+                    sum += Math.Exp(mel[b, t]);
                 }
                 frameEnergy[t] = Math.Max(sum / bins, 1e-12);
             }
-            // Target energy: linear gradient from first to last frame
-            var targetE = new double[vowelFrames];
-            for (int t = 0; t < vowelFrames; t++) {
-                double frac = vowelFrames > 1 ? (double)t / (vowelFrames - 1) : 1.0;
-                targetE[t] = frameEnergy[0] + (frameEnergy[vowelFrames - 1] - frameEnergy[0]) * frac;
+            var targetE = new double[consonantFrames];
+            for (int t = 0; t < consonantFrames; t++) {
+                double frac = consonantFrames > 1 ? (double)t / (consonantFrames - 1) : 1.0;
+                targetE[t] = frameEnergy[0] + (frameEnergy[consonantFrames - 1] - frameEnergy[0]) * frac;
             }
-            // Apply normalization: mel_new = mel - log(frameEnergy) + log(targetE)
-            for (int t = 0; t < vowelFrames; t++) {
+            for (int t = 0; t < consonantFrames; t++) {
                 float correction = (float)(Math.Log(targetE[t]) - Math.Log(frameEnergy[t]));
                 for (int b = 0; b < bins; b++) {
-                    mel[b, consonantFrames + t] += correction;
+                    mel[b, t] += correction;
                 }
             }
+        }
+
+        /// <summary>
+        /// Pad blank on the left with per-band log-domain fade-in from
+        /// near-silence to the first real frame, avoiding HiFi-GAN artifacts
+        /// on hard cuts.
+        /// </summary>
+        public static float[,] PadBlankLeftFadeIn(float[,] mel, int padFrames) {
+            if (padFrames <= 0) {
+                return mel;
+            }
+            int bins = mel.GetLength(0);
+            int frames = mel.GetLength(1);
+            int fadeLen = Math.Min(padFrames, 12);
+            var result = CreateBlankMel(bins, padFrames + frames);
+            for (int b = 0; b < bins; b++) {
+                for (int t = 0; t < frames; t++) {
+                    result[b, padFrames + t] = mel[b, t];
+                }
+            }
+            // Fade-in: last fadeLen blank frames blend from silence to first real frame
+            for (int f = 0; f < fadeLen; f++) {
+                int idx = padFrames - fadeLen + f;
+                float t = (float)(f + 1) / (fadeLen + 1);
+                for (int b = 0; b < bins; b++) {
+                    float realValue = result[b, padFrames];
+                    result[b, idx] = realValue + (float)Math.Log(Math.Max(t, 1e-5));
+                }
+            }
+            return result;
         }
 
         public static void ApplyPhraseEdgeEnvelope(HiFiUtauPhone[] phones, float[] samples, int sampleRate) {
