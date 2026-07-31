@@ -78,6 +78,7 @@ namespace OpenUtau.Core.HiFiUtau {
 
                     var model = GetModel(modelPath);
                     var phones = HiFiUtauPhone.CreateAll(phrase);
+                    AlignPhoneModelFrames(phones, phrase, model.Config);
 
                     // New cache directory structure
                     var cacheDir = Path.Join(PathManager.Inst.CachePath, "hifiutau");
@@ -140,6 +141,11 @@ namespace OpenUtau.Core.HiFiUtau {
                                 result.samples,
                                 HiFiUtauConfig.OutputSampleRate,
                                 GetPhraseNormalizeStrength(phones));
+                            // Keep VOL outside phrase normalization so its percentage remains a linear output ratio.
+                            ApplyPhoneVolumes(
+                                result.samples,
+                                phones,
+                                model.Config.ModelHop * (double)HiFiUtauConfig.OutputSampleRate / model.Config.SampleRate);
                             Renderers.ApplyDynamics(phrase, result);
                             WriteCacheWave(finalWavPath, result.samples);
                         }
@@ -155,7 +161,7 @@ namespace OpenUtau.Core.HiFiUtau {
         static ulong ComputeRawHash(RenderPhrase phrase) {
             using var stream = new MemoryStream();
             using (var writer = new BinaryWriter(stream)) {
-                writer.Write("hifiutau-v5-wave-loudness");
+                writer.Write("hifiutau-v6-volume-ratio");
                 writer.Write(phrase.preEffectHash);
                 WriteCurve(writer, phrase.pitches);
                 WriteCurve(writer, phrase.gender);
@@ -261,7 +267,6 @@ namespace OpenUtau.Core.HiFiUtau {
             foreach (var phone in phones) {
                 ApplyPhoneEnvelope(phone);
             }
-            AlignPhoneModelFrames(phones, phrase, model.Config);
             var f0 = SampleF0(phrase, model.Config.ModelHop, model.Config.SampleRate);
             var feat = model.ProcessFeatureSplice(phones);
             return model.Synthesize(feat, f0);
@@ -367,11 +372,73 @@ namespace OpenUtau.Core.HiFiUtau {
             return totalWeight > 0 ? weightedStrength / totalWeight : 86.0;
         }
 
+        internal static void ApplyPhoneVolumes(
+            float[] samples,
+            HiFiUtauPhone[] phones,
+            double samplesPerModelFrame) {
+            if (samples == null || samples.Length == 0 ||
+                phones == null || phones.Length == 0 ||
+                !double.IsFinite(samplesPerModelFrame) || samplesPerModelFrame <= 0) {
+                return;
+            }
+
+            static float GetGain(HiFiUtauPhone phone) {
+                return double.IsFinite(phone.Volume)
+                    ? (float)Math.Max(0, phone.Volume)
+                    : 1f;
+            }
+
+            int ToSample(int frame) => Math.Clamp(
+                (int)Math.Round(frame * samplesPerModelFrame, MidpointRounding.AwayFromZero),
+                0,
+                samples.Length);
+
+            var gains = new float[samples.Length];
+            float previousGain = GetGain(phones[0]);
+            Array.Fill(gains, previousGain);
+            int previousEnd = ToSample(phones[0].ModelEndFrame);
+
+            for (int i = 1; i < phones.Length; i++) {
+                int start = ToSample(phones[i].ModelStartFrame);
+                int end = ToSample(phones[i].ModelEndFrame);
+                if (end <= start) {
+                    continue;
+                }
+
+                float gain = GetGain(phones[i]);
+                if (start < previousEnd) {
+                    int overlapEnd = Math.Min(previousEnd, end);
+                    int overlapSamples = overlapEnd - start;
+                    float overlapStartGain = gains[start];
+                    for (int j = start; j < overlapEnd; j++) {
+                        float alpha = overlapSamples == 1
+                            ? 1f
+                            : (j - start) / (float)(overlapSamples - 1);
+                        gains[j] = overlapStartGain + (gain - overlapStartGain) * alpha;
+                    }
+                    Array.Fill(gains, gain, overlapEnd, end - overlapEnd);
+                } else {
+                    Array.Fill(gains, previousGain, previousEnd, start - previousEnd);
+                    Array.Fill(gains, gain, start, end - start);
+                }
+
+                if (end >= previousEnd) {
+                    previousEnd = end;
+                    previousGain = gain;
+                }
+            }
+
+            Array.Fill(gains, previousGain, previousEnd, samples.Length - previousEnd);
+            for (int i = 0; i < samples.Length; i++) {
+                samples[i] *= gains[i];
+            }
+        }
+
         static void ApplyPhoneEnvelope(HiFiUtauPhone phone) {
             if (phone.Mel == null || phone.Mel.GetLength(1) == 0) {
                 return;
             }
-            // Apply per-phone envelope amplitude after phtp (replaces Volume parameter)
+            // Apply the crossfade envelope after phtp. VOL is applied to the normalized waveform later.
             if (phone.Envelope != null && phone.Envelope.Length >= 5) {
                 HiFiUtauMath.ApplyEnvelopeToMel(phone.Mel, phone.Envelope);
             }
