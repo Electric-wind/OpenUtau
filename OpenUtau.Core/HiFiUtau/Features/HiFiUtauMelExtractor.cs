@@ -23,18 +23,6 @@ namespace OpenUtau.Core.HiFiUtau {
             return ExtractImpl(audio, centers);
         }
 
-        /// <summary>
-        /// Extract mel at floating-point source centers. Centers are floored to int
-        /// and clamped, matching Python centered_stft indices.astype(int).
-        /// </summary>
-        public float[,] Extract(float[] audio, double[] centers) {
-            var intCenters = new int[centers.Length];
-            for (int i = 0; i < centers.Length; i++) {
-                intCenters[i] = Math.Max(0, (int)Math.Floor(centers[i]));
-            }
-            return ExtractImpl(audio, intCenters);
-        }
-
         float[,] ExtractImpl(float[] audio, int[] centers) {
             int bins = config.FftSize / 2 + 1;
             var result = new float[config.NumMels, centers.Length];
