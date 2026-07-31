@@ -1,4 +1,4 @@
-name: Add HifiUTAU Renderer
+name: Add HifiUTAU renderer
 
 on:
   workflow_dispatch:
