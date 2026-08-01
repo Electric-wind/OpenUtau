@@ -77,6 +77,8 @@ namespace OpenUtau.Core.HiFiUtau {
                     }
 
                     var model = GetModel(modelPath);
+                    var phones = HiFiUtauPhone.CreateAll(phrase);
+                    AlignPhoneModelFrames(phones, phrase, model.Config);
 
                     // New cache directory structure
                     var cacheDir = Path.Join(PathManager.Inst.CachePath, "hifiutau");
@@ -89,7 +91,7 @@ namespace OpenUtau.Core.HiFiUtau {
 
                     var rawHash = ComputeRawHash(phrase);
                     var rawWavPath = Path.Join(rawDir, $"{model.Hash:x16}-{rawHash:x16}.wav");
-                    var finalWavPath = Path.Join(finalDir, $"{model.Hash:x16}-{phrase.hash:x16}.wav");
+                    var finalWavPath = Path.Join(finalDir, $"{model.Hash:x16}-{rawHash:x16}-{phrase.hash:x16}.wav");
                     var hnsepHarmonicPath = Path.Join(hnsepDir, $"harmonic-{model.Hash:x16}-{rawHash:x16}.wav");
                     var hnsepNoisePath = Path.Join(hnsepDir, $"noise-{model.Hash:x16}-{rawHash:x16}.wav");
                     phrase.AddCacheFile(finalWavPath);
@@ -105,7 +107,6 @@ namespace OpenUtau.Core.HiFiUtau {
                             result.samples = LoadCacheWave(rawWavPath);
                         }
                         if (result.samples == null) {
-                            var phones = HiFiUtauPhone.CreateAll(phrase);
                             result.samples = RenderFeaturePipeline(phones, phrase, model, cancellation.Token);
                             if (cancellation.IsCancellationRequested) {
                                 return result;
@@ -132,11 +133,18 @@ namespace OpenUtau.Core.HiFiUtau {
                             } else {
                                 AudioPostProcessor.Apply(phrase, result);
                             }
-                            Renderers.ApplyDynamics(phrase, result);
                             if (postCurves.NeedsGrowl) {
                                 var pitchHzCurve = AudioPostProcessingDsp.PitchHzCurve(phrase, result.samples.Length);
                                 AudioPostProcessor.ApplyGrowl(result.samples, postCurves.Growl, AudioPostProcessingDsp.SampleRate, pitchHzCurve);
                             }
+                            double samplesPerModelFrame =
+                                model.Config.ModelHop * (double)HiFiUtauConfig.OutputSampleRate / model.Config.SampleRate;
+                            HiFiUtauLoudnessNormalizer.NormalizePhonesInPlace(
+                                result.samples,
+                                phones,
+                                HiFiUtauConfig.OutputSampleRate,
+                                samplesPerModelFrame);
+                            Renderers.ApplyDynamics(phrase, result);
                             WriteCacheWave(finalWavPath, result.samples);
                         }
                     }
@@ -151,7 +159,7 @@ namespace OpenUtau.Core.HiFiUtau {
         static ulong ComputeRawHash(RenderPhrase phrase) {
             using var stream = new MemoryStream();
             using (var writer = new BinaryWriter(stream)) {
-                writer.Write("hifiutau-mel-loop-v1");
+                writer.Write("hifiutau-v7-phone-loudness");
                 writer.Write(phrase.preEffectHash);
                 WriteCurve(writer, phrase.pitches);
                 WriteCurve(writer, phrase.gender);
@@ -257,7 +265,6 @@ namespace OpenUtau.Core.HiFiUtau {
             foreach (var phone in phones) {
                 ApplyPhoneEnvelope(phone);
             }
-            AlignPhoneModelFrames(phones, phrase, model.Config);
             var f0 = SampleF0(phrase, model.Config.ModelHop, model.Config.SampleRate);
             var feat = model.ProcessFeatureSplice(phones);
             return model.Synthesize(feat, f0);
@@ -305,6 +312,7 @@ namespace OpenUtau.Core.HiFiUtau {
             int totalFrames = Math.Max(1, (int)(totalBudgetMs / config.MsPerFeatureFrame));
             int targetConFrames = Math.Max(1, (int)(conFramesOrig * stretch));
             targetConFrames = Math.Min(targetConFrames, Math.Max(1, totalFrames - 1));
+
             var melOut = phone.StretchMode == (int)StretchMode.Loop
                 ? HiFiUtauMath.ResamplePhoneMelLoop(
                     melFull, totalFrames, conFramesOrig, targetConFrames, vowFramesOrig, stretch)
@@ -337,14 +345,6 @@ namespace OpenUtau.Core.HiFiUtau {
         static void ApplyPerPhoneControls(HiFiUtauPhone phone) {
             if (phone.Mel == null || phone.Mel.GetLength(1) == 0) {
                 return;
-            }
-            var normalize = phone.Normalize / 100.0;
-            if (normalize > 0) {
-                double rms = HiFiUtauMath.MelRms(phone.Mel);
-                if (rms > 1e-12) {
-                    double target = rms * (1 - normalize) + 0.5 * normalize;
-                    HiFiUtauMath.AddLogGain(phone.Mel, Math.Log(target / rms));
-                }
             }
             if (phone.Gender != null && phone.Gender.Any(value => Math.Abs(value) > 0.001f)) {
                 HiFiUtauMath.WarpMelFrequency(phone.Mel, phone.Gender.Select(value => -value / 100f).ToArray());
