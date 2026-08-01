@@ -137,15 +137,18 @@ namespace OpenUtau.Core.HiFiUtau {
                                 var pitchHzCurve = AudioPostProcessingDsp.PitchHzCurve(phrase, result.samples.Length);
                                 AudioPostProcessor.ApplyGrowl(result.samples, postCurves.Growl, AudioPostProcessingDsp.SampleRate, pitchHzCurve);
                             }
-                            HiFiUtauLoudnessNormalizer.NormalizeInPlace(
+                            double samplesPerModelFrame =
+                                model.Config.ModelHop * (double)HiFiUtauConfig.OutputSampleRate / model.Config.SampleRate;
+                            HiFiUtauLoudnessNormalizer.NormalizePhonesInPlace(
                                 result.samples,
+                                phones,
                                 HiFiUtauConfig.OutputSampleRate,
-                                GetPhraseNormalizeStrength(phones));
-                            // Keep VOL outside phrase normalization so its percentage remains a linear output ratio.
+                                samplesPerModelFrame);
+                            // Keep VOL outside loudness normalization so its percentage remains a linear output ratio.
                             ApplyPhoneVolumes(
                                 result.samples,
                                 phones,
-                                model.Config.ModelHop * (double)HiFiUtauConfig.OutputSampleRate / model.Config.SampleRate);
+                                samplesPerModelFrame);
                             Renderers.ApplyDynamics(phrase, result);
                             WriteCacheWave(finalWavPath, result.samples);
                         }
@@ -161,7 +164,7 @@ namespace OpenUtau.Core.HiFiUtau {
         static ulong ComputeRawHash(RenderPhrase phrase) {
             using var stream = new MemoryStream();
             using (var writer = new BinaryWriter(stream)) {
-                writer.Write("hifiutau-v6-volume-ratio");
+                writer.Write("hifiutau-v7-phone-loudness");
                 writer.Write(phrase.preEffectHash);
                 WriteCurve(writer, phrase.pitches);
                 WriteCurve(writer, phrase.gender);
@@ -356,20 +359,6 @@ namespace OpenUtau.Core.HiFiUtau {
                     HiFiUtauMath.WarpMelFrequency(phone.Mel, Math.Pow(2.0, semitones / 12.0));
                 }
             }
-        }
-
-        static double GetPhraseNormalizeStrength(HiFiUtauPhone[] phones) {
-            double weightedStrength = 0;
-            double totalWeight = 0;
-            foreach (var phone in phones) {
-                double duration = phone.Envelope != null && phone.Envelope.Length >= 5
-                    ? phone.Envelope[4].X - phone.Envelope[0].X
-                    : phone.DurationMs;
-                double weight = Math.Max(1.0, duration);
-                weightedStrength += Math.Clamp(phone.Normalize, 0, 100) * weight;
-                totalWeight += weight;
-            }
-            return totalWeight > 0 ? weightedStrength / totalWeight : 86.0;
         }
 
         internal static void ApplyPhoneVolumes(

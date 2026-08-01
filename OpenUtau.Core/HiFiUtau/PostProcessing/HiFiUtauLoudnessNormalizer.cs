@@ -25,18 +25,8 @@ namespace OpenUtau.Core.HiFiUtau {
                 return 0;
             }
 
-            strength = Math.Clamp(strength, 0, 100);
-            var measurement = PrepareMeasurement(samples, sampleRate, trimSilence);
-            double inputLufs = MeasureIntegratedLoudness(measurement, sampleRate);
-            double gainDb = double.IsFinite(inputLufs)
-                ? (targetLufs - inputLufs) * strength / 100.0
-                : 0.0;
-
-            double peak = Peak(samples);
-            if (peak > 1e-12) {
-                double peakGainDb = peakLimitDb - 20.0 * Math.Log10(peak);
-                gainDb = Math.Min(gainDb, peakGainDb);
-            }
+            double gainDb = CalculateGainDb(
+                samples, sampleRate, strength, targetLufs, peakLimitDb, trimSilence);
             if (!double.IsFinite(gainDb) || Math.Abs(gainDb) < 1e-9) {
                 return 0;
             }
@@ -46,6 +36,53 @@ namespace OpenUtau.Core.HiFiUtau {
                 samples[i] *= gain;
             }
             return gainDb;
+        }
+
+        public static void NormalizePhonesInPlace(
+            float[] samples,
+            HiFiUtauPhone[] phones,
+            int sampleRate,
+            double samplesPerModelFrame,
+            double targetLufs = TargetLufs,
+            double peakLimitDb = PeakLimitDb) {
+            if (samples == null || samples.Length == 0 ||
+                phones == null || phones.Length == 0 || sampleRate <= 0 ||
+                !double.IsFinite(samplesPerModelFrame) || samplesPerModelFrame <= 0) {
+                return;
+            }
+
+            int ToSample(int frame) => Math.Clamp(
+                (int)Math.Round(frame * samplesPerModelFrame, MidpointRounding.AwayFromZero),
+                0,
+                samples.Length);
+
+            var segments = new List<GainSegment>();
+            foreach (var phone in phones) {
+                int start = ToSample(phone.ModelStartFrame);
+                int end = ToSample(phone.ModelEndFrame);
+                if (end <= start) {
+                    continue;
+                }
+
+                var phoneSamples = new float[end - start];
+                Array.Copy(samples, start, phoneSamples, 0, phoneSamples.Length);
+                double gainDb = CalculateGainDb(
+                    phoneSamples,
+                    sampleRate,
+                    phone.Normalize,
+                    targetLufs,
+                    peakLimitDb,
+                    trimSilence: true);
+                float gain = double.IsFinite(gainDb)
+                    ? (float)Math.Pow(10.0, gainDb / 20.0)
+                    : 1f;
+                segments.Add(new GainSegment(start, end, gain));
+            }
+            if (segments.Count == 0) {
+                return;
+            }
+
+            ApplySegmentGains(samples, segments);
         }
 
         public static double MeasureIntegratedLoudness(float[] samples, int sampleRate) {
@@ -113,6 +150,64 @@ namespace OpenUtau.Core.HiFiUtau {
             var segment = new float[length];
             Array.Copy(samples, start, segment, 0, Math.Min(length, samples.Length - start));
             return PadToBlock(segment, sampleRate);
+        }
+
+        static double CalculateGainDb(
+            float[] samples,
+            int sampleRate,
+            double strength,
+            double targetLufs,
+            double peakLimitDb,
+            bool trimSilence) {
+            strength = Math.Clamp(strength, 0, 100);
+            var measurement = PrepareMeasurement(samples, sampleRate, trimSilence);
+            double inputLufs = MeasureIntegratedLoudness(measurement, sampleRate);
+            double gainDb = double.IsFinite(inputLufs)
+                ? (targetLufs - inputLufs) * strength / 100.0
+                : 0.0;
+
+            double peak = Peak(samples);
+            if (peak > 1e-12) {
+                double peakGainDb = peakLimitDb - 20.0 * Math.Log10(peak);
+                gainDb = Math.Min(gainDb, peakGainDb);
+            }
+            return double.IsFinite(gainDb) ? gainDb : 0.0;
+        }
+
+        static void ApplySegmentGains(float[] samples, List<GainSegment> segments) {
+            var gains = new float[samples.Length];
+            float previousGain = segments[0].Gain;
+            Array.Fill(gains, previousGain);
+            int previousEnd = segments[0].End;
+
+            for (int i = 1; i < segments.Count; i++) {
+                var segment = segments[i];
+                if (segment.Start < previousEnd) {
+                    int overlapEnd = Math.Min(previousEnd, segment.End);
+                    int overlapSamples = overlapEnd - segment.Start;
+                    float overlapStartGain = gains[segment.Start];
+                    for (int j = segment.Start; j < overlapEnd; j++) {
+                        float alpha = overlapSamples == 1
+                            ? 1f
+                            : (j - segment.Start) / (float)(overlapSamples - 1);
+                        gains[j] = overlapStartGain + (segment.Gain - overlapStartGain) * alpha;
+                    }
+                    Array.Fill(gains, segment.Gain, overlapEnd, segment.End - overlapEnd);
+                } else {
+                    Array.Fill(gains, previousGain, previousEnd, segment.Start - previousEnd);
+                    Array.Fill(gains, segment.Gain, segment.Start, segment.End - segment.Start);
+                }
+
+                if (segment.End >= previousEnd) {
+                    previousEnd = segment.End;
+                    previousGain = segment.Gain;
+                }
+            }
+
+            Array.Fill(gains, previousGain, previousEnd, samples.Length - previousEnd);
+            for (int i = 0; i < samples.Length; i++) {
+                samples[i] *= gains[i];
+            }
         }
 
         static bool TryFindActiveRange(float[] samples, int sampleRate, out int start, out int end) {
@@ -184,6 +279,18 @@ namespace OpenUtau.Core.HiFiUtau {
             return meanSquare > 0
                 ? -0.691 + 10.0 * Math.Log10(meanSquare)
                 : double.NegativeInfinity;
+        }
+
+        readonly struct GainSegment {
+            public readonly int Start;
+            public readonly int End;
+            public readonly float Gain;
+
+            public GainSegment(int start, int end, float gain) {
+                Start = start;
+                End = end;
+                Gain = gain;
+            }
         }
 
         readonly struct Biquad {
