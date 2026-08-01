@@ -309,37 +309,20 @@ namespace OpenUtau.Core.HiFiUtau {
             int totalFrames = Math.Max(1, (int)(totalBudgetMs / config.MsPerFeatureFrame));
             int targetConFrames = Math.Max(1, (int)(conFramesOrig * stretch));
             targetConFrames = Math.Min(targetConFrames, Math.Max(1, totalFrames - 1));
-            int targetVowFrames = Math.Max(0, totalFrames - targetConFrames);
-
-            if (phone.StretchMode == (int)StretchMode.Loop && vowFramesOrig > 1 && targetVowFrames > vowFramesOrig * 1.5) {
-                melFull = HiFiUtauMath.ReflectPadVowel(
-                    melFull,
-                    conFramesOrig,
-                    targetVowFrames - vowFramesOrig + Math.Min(4, vowFramesOrig / 2));
-                nFrames = melFull.GetLength(1);
-                vowFramesOrig = nFrames - conFramesOrig;
-            }
-
-            var melOut = HiFiUtauMath.ResamplePhoneMel(
-                melFull,
-                totalFrames,
-                conFramesOrig,
-                targetConFrames,
-                vowFramesOrig,
-                stretch);
-
-            // strt=1 (loop): normalize vowel energy to linear gradient
-            if (phone.StretchMode == (int)StretchMode.Loop && targetVowFrames > 1 &&
-                melOut.GetLength(1) >= targetConFrames + 2) {
-                HiFiUtauMath.NormalizeLoopVowelEnergy(melOut, targetConFrames);
-            }
+            var melOut = phone.StretchMode == (int)StretchMode.Loop
+                ? HiFiUtauMath.ResamplePhoneMelLoop(
+                    melFull, totalFrames, conFramesOrig, targetConFrames, vowFramesOrig, stretch)
+                : HiFiUtauMath.ResamplePhoneMel(
+                    melFull, totalFrames, conFramesOrig, targetConFrames, vowFramesOrig, stretch);
 
             if (preToLeftMs > 0) {
                 int leftCutFrames = (int)(preToLeftMs / config.MsPerFeatureFrame);
                 melOut = HiFiUtauMath.SliceMel(melOut, Math.Min(leftCutFrames, melOut.GetLength(1)), melOut.GetLength(1));
             } else if (preToLeftMs < 0) {
                 int leftPadFrames = (int)(-preToLeftMs / config.MsPerFeatureFrame);
-                melOut = HiFiUtauMath.PadBlankLeft(melOut, leftPadFrames);
+                melOut = phone.StretchMode == (int)StretchMode.Loop
+                    ? HiFiUtauMath.PadBlankLeftFadeIn(melOut, leftPadFrames)
+                    : HiFiUtauMath.PadBlankLeft(melOut, leftPadFrames);
             }
             return melOut;
         }

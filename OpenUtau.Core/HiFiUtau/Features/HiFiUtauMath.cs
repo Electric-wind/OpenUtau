@@ -237,40 +237,66 @@ namespace OpenUtau.Core.HiFiUtau {
         }
 
         /// <summary>
-        /// For strt=1 (loop) mode: normalize vowel frame energy to a linear gradient
-        /// from first to last frame, eliminating energy fluctuations caused by
-        /// the triangular wave looping. Matching Python Fragment's strt=1 energy normalization.
+        /// Smooths the frame energy of a looped vowel to the linear trend between
+        /// its first and last frames. This matches Fragment's strt=1 processing.
         /// </summary>
         public static void NormalizeLoopVowelEnergy(float[,] mel, int consonantFrames) {
             int bins = mel.GetLength(0);
             int totalFrames = mel.GetLength(1);
+            consonantFrames = Math.Clamp(consonantFrames, 0, totalFrames);
             int vowelFrames = totalFrames - consonantFrames;
-            if (vowelFrames <= 1 || totalFrames < consonantFrames + 2) {
+            if (bins == 0 || vowelFrames <= 1) {
                 return;
             }
-            // Compute frame energy for vowel part
+
             var frameEnergy = new double[vowelFrames];
             for (int t = 0; t < vowelFrames; t++) {
                 double sum = 0;
                 for (int b = 0; b < bins; b++) {
-                    double v = Math.Exp(mel[b, consonantFrames + t]);
-                    sum += v;
+                    sum += Math.Exp(mel[b, consonantFrames + t]);
                 }
                 frameEnergy[t] = Math.Max(sum / bins, 1e-12);
             }
-            // Target energy: linear gradient from first to last frame
-            var targetE = new double[vowelFrames];
+
             for (int t = 0; t < vowelFrames; t++) {
-                double frac = vowelFrames > 1 ? (double)t / (vowelFrames - 1) : 1.0;
-                targetE[t] = frameEnergy[0] + (frameEnergy[vowelFrames - 1] - frameEnergy[0]) * frac;
-            }
-            // Apply normalization: mel_new = mel - log(frameEnergy) + log(targetE)
-            for (int t = 0; t < vowelFrames; t++) {
-                float correction = (float)(Math.Log(targetE[t]) - Math.Log(frameEnergy[t]));
+                double fraction = t / (double)(vowelFrames - 1);
+                double targetEnergy = frameEnergy[0] +
+                    (frameEnergy[vowelFrames - 1] - frameEnergy[0]) * fraction;
+                float correction = (float)(Math.Log(targetEnergy) - Math.Log(frameEnergy[t]));
                 for (int b = 0; b < bins; b++) {
                     mel[b, consonantFrames + t] += correction;
                 }
             }
+        }
+
+        /// <summary>
+        /// Pads silence on the left and fades its last frames into the first mel
+        /// frame, matching Fragment's protection against hard decoder transitions.
+        /// </summary>
+        public static float[,] PadBlankLeftFadeIn(float[,] mel, int padFrames) {
+            if (padFrames <= 0) {
+                return mel;
+            }
+            int bins = mel.GetLength(0);
+            int frames = mel.GetLength(1);
+            var result = CreateBlankMel(bins, padFrames + frames);
+            for (int b = 0; b < bins; b++) {
+                for (int t = 0; t < frames; t++) {
+                    result[b, padFrames + t] = mel[b, t];
+                }
+            }
+
+            int fadeFrames = Math.Min(12, padFrames);
+            if (frames > 0) {
+                for (int t = 0; t < fadeFrames; t++) {
+                    int target = padFrames - fadeFrames + t;
+                    double alpha = (t + 1.0) / (fadeFrames + 1.0);
+                    for (int b = 0; b < bins; b++) {
+                        result[b, target] = (float)Math.Log(Math.Exp(mel[b, 0]) * alpha + 1e-10);
+                    }
+                }
+            }
+            return result;
         }
 
         public static void ApplyPhraseEdgeEnvelope(HiFiUtauPhone[] phones, float[] samples, int sampleRate) {
@@ -303,14 +329,21 @@ namespace OpenUtau.Core.HiFiUtau {
             }
             int bins = mel.GetLength(0);
             int frames = mel.GetLength(1);
+            consonantFrames = Math.Clamp(consonantFrames, 0, frames);
             int vowelFrames = frames - consonantFrames;
             if (vowelFrames <= 1) {
                 return mel;
             }
             var result = new float[bins, frames + padFrames];
-            Array.Copy(mel, result, mel.Length);
-            // numpy mode='reflect': starts from vowelFrames-2 (second-to-last),
-            // goes backwards to 0, then forward to vowelFrames-1, repeat.
+            // Rectangular arrays use the full second dimension as their row stride,
+            // so a flat Array.Copy would put source rows into the wrong destinations.
+            for (int b = 0; b < bins; b++) {
+                for (int t = 0; t < frames; t++) {
+                    result[b, t] = mel[b, t];
+                }
+            }
+            // numpy.pad(vowel, (0, padFrames), mode='reflect') continues from
+            // the second-to-last vowel frame, excluding each reflected edge.
             int period = 2 * vowelFrames - 2;
             for (int t = 0; t < padFrames; t++) {
                 int p = t % period;
@@ -325,6 +358,34 @@ namespace OpenUtau.Core.HiFiUtau {
                 for (int b = 0; b < bins; b++) {
                     result[b, frames + t] = mel[b, src];
                 }
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// Loop-mode mel processing matching HiFiUTAU-engine Fragment. Long vowels
+        /// are reflect-padded, linearly mapped to the note duration, then normalized
+        /// to remove periodic energy changes introduced by the reflected material.
+        /// </summary>
+        public static float[,] ResamplePhoneMelLoop(float[,] mel, int totalFrames, int conFramesOrig, int targetConFrames, int vowFramesOrig, double stretch) {
+            totalFrames = Math.Max(1, totalFrames);
+            targetConFrames = Math.Clamp(targetConFrames, 0, totalFrames - 1);
+            int bins = mel.GetLength(0);
+            if (bins == 0 || mel.GetLength(1) == 0) {
+                return new float[bins, totalFrames];
+            }
+            int targetVowFrames = totalFrames - targetConFrames;
+            if (vowFramesOrig > 1 && targetVowFrames > vowFramesOrig * 1.5) {
+                int padExtra = Math.Min(4, vowFramesOrig / 2);
+                int padFrames = targetVowFrames - vowFramesOrig + padExtra;
+                mel = ReflectPadVowel(mel, conFramesOrig, padFrames);
+                vowFramesOrig = mel.GetLength(1) - conFramesOrig;
+            }
+
+            var result = ResamplePhoneMel(
+                mel, totalFrames, conFramesOrig, targetConFrames, vowFramesOrig, stretch);
+            if (targetVowFrames > 1 && result.GetLength(1) >= targetConFrames + 2) {
+                NormalizeLoopVowelEnergy(result, targetConFrames);
             }
             return result;
         }
