@@ -77,6 +77,7 @@ namespace OpenUtau.Core.HiFiUtau {
                     }
 
                     var model = GetModel(modelPath);
+                    var phones = HiFiUtauPhone.CreateAll(phrase);
 
                     // New cache directory structure
                     var cacheDir = Path.Join(PathManager.Inst.CachePath, "hifiutau");
@@ -89,7 +90,7 @@ namespace OpenUtau.Core.HiFiUtau {
 
                     var rawHash = ComputeRawHash(phrase);
                     var rawWavPath = Path.Join(rawDir, $"{model.Hash:x16}-{rawHash:x16}.wav");
-                    var finalWavPath = Path.Join(finalDir, $"{model.Hash:x16}-{phrase.hash:x16}.wav");
+                    var finalWavPath = Path.Join(finalDir, $"{model.Hash:x16}-{rawHash:x16}-{phrase.hash:x16}.wav");
                     var hnsepHarmonicPath = Path.Join(hnsepDir, $"harmonic-{model.Hash:x16}-{rawHash:x16}.wav");
                     var hnsepNoisePath = Path.Join(hnsepDir, $"noise-{model.Hash:x16}-{rawHash:x16}.wav");
                     phrase.AddCacheFile(finalWavPath);
@@ -105,7 +106,6 @@ namespace OpenUtau.Core.HiFiUtau {
                             result.samples = LoadCacheWave(rawWavPath);
                         }
                         if (result.samples == null) {
-                            var phones = HiFiUtauPhone.CreateAll(phrase);
                             result.samples = RenderFeaturePipeline(phones, phrase, model, cancellation.Token);
                             if (cancellation.IsCancellationRequested) {
                                 return result;
@@ -132,11 +132,15 @@ namespace OpenUtau.Core.HiFiUtau {
                             } else {
                                 AudioPostProcessor.Apply(phrase, result);
                             }
-                            Renderers.ApplyDynamics(phrase, result);
                             if (postCurves.NeedsGrowl) {
                                 var pitchHzCurve = AudioPostProcessingDsp.PitchHzCurve(phrase, result.samples.Length);
                                 AudioPostProcessor.ApplyGrowl(result.samples, postCurves.Growl, AudioPostProcessingDsp.SampleRate, pitchHzCurve);
                             }
+                            HiFiUtauLoudnessNormalizer.NormalizeInPlace(
+                                result.samples,
+                                HiFiUtauConfig.OutputSampleRate,
+                                GetPhraseNormalizeStrength(phones));
+                            Renderers.ApplyDynamics(phrase, result);
                             WriteCacheWave(finalWavPath, result.samples);
                         }
                     }
@@ -151,7 +155,7 @@ namespace OpenUtau.Core.HiFiUtau {
         static ulong ComputeRawHash(RenderPhrase phrase) {
             using var stream = new MemoryStream();
             using (var writer = new BinaryWriter(stream)) {
-                writer.Write("hifiutau-mel-loop-v1");
+                writer.Write("hifiutau-wave-loudness-v1");
                 writer.Write(phrase.preEffectHash);
                 WriteCurve(writer, phrase.pitches);
                 WriteCurve(writer, phrase.gender);
@@ -338,14 +342,6 @@ namespace OpenUtau.Core.HiFiUtau {
             if (phone.Mel == null || phone.Mel.GetLength(1) == 0) {
                 return;
             }
-            var normalize = phone.Normalize / 100.0;
-            if (normalize > 0) {
-                double rms = HiFiUtauMath.MelRms(phone.Mel);
-                if (rms > 1e-12) {
-                    double target = rms * (1 - normalize) + 0.5 * normalize;
-                    HiFiUtauMath.AddLogGain(phone.Mel, Math.Log(target / rms));
-                }
-            }
             if (phone.Gender != null && phone.Gender.Any(value => Math.Abs(value) > 0.001f)) {
                 HiFiUtauMath.WarpMelFrequency(phone.Mel, phone.Gender.Select(value => -value / 100f).ToArray());
             } else {
@@ -354,6 +350,20 @@ namespace OpenUtau.Core.HiFiUtau {
                     HiFiUtauMath.WarpMelFrequency(phone.Mel, Math.Pow(2.0, semitones / 12.0));
                 }
             }
+        }
+
+        static double GetPhraseNormalizeStrength(HiFiUtauPhone[] phones) {
+            double weightedStrength = 0;
+            double totalWeight = 0;
+            foreach (var phone in phones) {
+                double duration = phone.Envelope != null && phone.Envelope.Length >= 5
+                    ? phone.Envelope[4].X - phone.Envelope[0].X
+                    : phone.DurationMs;
+                double weight = Math.Max(1.0, duration);
+                weightedStrength += Math.Clamp(phone.Normalize, 0, 100) * weight;
+                totalWeight += weight;
+            }
+            return totalWeight > 0 ? weightedStrength / totalWeight : 86.0;
         }
 
         static void ApplyPhoneEnvelope(HiFiUtauPhone phone) {
