@@ -48,34 +48,5 @@ namespace OpenUtau.Core.HiFiUtau {
                 1.0f, 1.0f, 1.0f, 1.0f, 1.0f,
             }, samples);
         }
-
-        [Fact]
-        public void ApplyPhoneVolumes_SmoothsAdjacentPhonesWithoutOverlap() {
-            const int boundary = 2205;
-            var samples = new float[boundary * 2];
-            Array.Fill(samples, 1f);
-            var phones = new[] {
-                new HiFiUtauPhone {
-                    ModelStartFrame = 0,
-                    ModelEndFrame = boundary,
-                    Volume = 0.5,
-                },
-                new HiFiUtauPhone {
-                    ModelStartFrame = boundary,
-                    ModelEndFrame = samples.Length,
-                    Volume = 1.0,
-                },
-            };
-
-            HiFiUtauRenderer.ApplyPhoneVolumes(samples, phones, 1.0);
-
-            Assert.Equal(0.5f, samples[0]);
-            Assert.Equal(1.0f, samples[^1]);
-            float maxStep = 0;
-            for (int i = 1; i < samples.Length; i++) {
-                maxStep = Math.Max(maxStep, Math.Abs(samples[i] - samples[i - 1]));
-            }
-            Assert.InRange(maxStep, 0, 0.001f);
-        }
     }
 }

@@ -17,7 +17,6 @@ using OpenUtau.Core.Util;
 namespace OpenUtau.Core.HiFiUtau {
     public class HiFiUtauRenderer : IRenderer {
         const int DynamicInterval = 5;
-        const string FinalCacheVersion = "smooth-phone-gains-v1";
         static readonly Dictionary<string, HiFiUtauModel> models = new Dictionary<string, HiFiUtauModel>();
         static readonly object modelsLock = new object();
 
@@ -92,9 +91,7 @@ namespace OpenUtau.Core.HiFiUtau {
 
                     var rawHash = ComputeRawHash(phrase);
                     var rawWavPath = Path.Join(rawDir, $"{model.Hash:x16}-{rawHash:x16}.wav");
-                    var finalWavPath = Path.Join(
-                        finalDir,
-                        $"{model.Hash:x16}-{rawHash:x16}-{phrase.hash:x16}-{FinalCacheVersion}.wav");
+                    var finalWavPath = Path.Join(finalDir, $"{model.Hash:x16}-{rawHash:x16}-{phrase.hash:x16}.wav");
                     var hnsepHarmonicPath = Path.Join(hnsepDir, $"harmonic-{model.Hash:x16}-{rawHash:x16}.wav");
                     var hnsepNoisePath = Path.Join(hnsepDir, $"noise-{model.Hash:x16}-{rawHash:x16}.wav");
                     phrase.AddCacheFile(finalWavPath);
@@ -385,21 +382,45 @@ namespace OpenUtau.Core.HiFiUtau {
                 0,
                 samples.Length);
 
-            var segments = new List<HiFiUtauGainSegment>();
-            foreach (var phone in phones) {
-                int start = ToSample(phone.ModelStartFrame);
-                int end = ToSample(phone.ModelEndFrame);
+            var gains = new float[samples.Length];
+            float previousGain = GetGain(phones[0]);
+            Array.Fill(gains, previousGain);
+            int previousEnd = ToSample(phones[0].ModelEndFrame);
+
+            for (int i = 1; i < phones.Length; i++) {
+                int start = ToSample(phones[i].ModelStartFrame);
+                int end = ToSample(phones[i].ModelEndFrame);
                 if (end <= start) {
                     continue;
                 }
-                segments.Add(HiFiUtauGainSegment.FromPhone(
-                    phone,
-                    start,
-                    end,
-                    GetGain(phone),
-                    HiFiUtauConfig.OutputSampleRate));
+
+                float gain = GetGain(phones[i]);
+                if (start < previousEnd) {
+                    int overlapEnd = Math.Min(previousEnd, end);
+                    int overlapSamples = overlapEnd - start;
+                    float overlapStartGain = gains[start];
+                    for (int j = start; j < overlapEnd; j++) {
+                        float alpha = overlapSamples == 1
+                            ? 1f
+                            : (j - start) / (float)(overlapSamples - 1);
+                        gains[j] = overlapStartGain + (gain - overlapStartGain) * alpha;
+                    }
+                    Array.Fill(gains, gain, overlapEnd, end - overlapEnd);
+                } else {
+                    Array.Fill(gains, previousGain, previousEnd, start - previousEnd);
+                    Array.Fill(gains, gain, start, end - start);
+                }
+
+                if (end >= previousEnd) {
+                    previousEnd = end;
+                    previousGain = gain;
+                }
             }
-            HiFiUtauGainSmoother.Apply(samples, segments);
+
+            Array.Fill(gains, previousGain, previousEnd, samples.Length - previousEnd);
+            for (int i = 0; i < samples.Length; i++) {
+                samples[i] *= gains[i];
+            }
         }
 
         static void ApplyPhoneEnvelope(HiFiUtauPhone phone) {
