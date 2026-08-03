@@ -56,7 +56,7 @@ namespace OpenUtau.Core.HiFiUtau {
                 0,
                 samples.Length);
 
-            var segments = new List<GainSegment>();
+            var segments = new List<HiFiUtauGainSegment>();
             foreach (var phone in phones) {
                 int start = ToSample(phone.ModelStartFrame);
                 int end = ToSample(phone.ModelEndFrame);
@@ -76,13 +76,14 @@ namespace OpenUtau.Core.HiFiUtau {
                 float gain = double.IsFinite(gainDb)
                     ? (float)Math.Pow(10.0, gainDb / 20.0)
                     : 1f;
-                segments.Add(new GainSegment(start, end, gain));
+                segments.Add(HiFiUtauGainSegment.FromPhone(
+                    phone, start, end, gain, sampleRate));
             }
             if (segments.Count == 0) {
                 return;
             }
 
-            ApplySegmentGains(samples, segments);
+            HiFiUtauGainSmoother.Apply(samples, segments);
         }
 
         public static double MeasureIntegratedLoudness(float[] samples, int sampleRate) {
@@ -174,42 +175,6 @@ namespace OpenUtau.Core.HiFiUtau {
             return double.IsFinite(gainDb) ? gainDb : 0.0;
         }
 
-        static void ApplySegmentGains(float[] samples, List<GainSegment> segments) {
-            var gains = new float[samples.Length];
-            float previousGain = segments[0].Gain;
-            Array.Fill(gains, previousGain);
-            int previousEnd = segments[0].End;
-
-            for (int i = 1; i < segments.Count; i++) {
-                var segment = segments[i];
-                if (segment.Start < previousEnd) {
-                    int overlapEnd = Math.Min(previousEnd, segment.End);
-                    int overlapSamples = overlapEnd - segment.Start;
-                    float overlapStartGain = gains[segment.Start];
-                    for (int j = segment.Start; j < overlapEnd; j++) {
-                        float alpha = overlapSamples == 1
-                            ? 1f
-                            : (j - segment.Start) / (float)(overlapSamples - 1);
-                        gains[j] = overlapStartGain + (segment.Gain - overlapStartGain) * alpha;
-                    }
-                    Array.Fill(gains, segment.Gain, overlapEnd, segment.End - overlapEnd);
-                } else {
-                    Array.Fill(gains, previousGain, previousEnd, segment.Start - previousEnd);
-                    Array.Fill(gains, segment.Gain, segment.Start, segment.End - segment.Start);
-                }
-
-                if (segment.End >= previousEnd) {
-                    previousEnd = segment.End;
-                    previousGain = segment.Gain;
-                }
-            }
-
-            Array.Fill(gains, previousGain, previousEnd, samples.Length - previousEnd);
-            for (int i = 0; i < samples.Length; i++) {
-                samples[i] *= gains[i];
-            }
-        }
-
         static bool TryFindActiveRange(float[] samples, int sampleRate, out int start, out int end) {
             start = 0;
             end = samples.Length;
@@ -279,18 +244,6 @@ namespace OpenUtau.Core.HiFiUtau {
             return meanSquare > 0
                 ? -0.691 + 10.0 * Math.Log10(meanSquare)
                 : double.NegativeInfinity;
-        }
-
-        readonly struct GainSegment {
-            public readonly int Start;
-            public readonly int End;
-            public readonly float Gain;
-
-            public GainSegment(int start, int end, float gain) {
-                Start = start;
-                End = end;
-                Gain = gain;
-            }
         }
 
         readonly struct Biquad {

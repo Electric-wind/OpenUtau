@@ -87,10 +87,11 @@ namespace OpenUtau.Core.HiFiUtau {
             HiFiUtauLoudnessNormalizer.NormalizePhonesInPlace(
                 samples, phones, SampleRate, 1.0);
 
-            var first = new float[SampleRate];
-            var second = new float[SampleRate];
+            // Exclude the short boundary transition when checking each target.
+            var first = new float[SampleRate * 9 / 10];
+            var second = new float[SampleRate * 9 / 10];
             Array.Copy(samples, 0, first, 0, first.Length);
-            Array.Copy(samples, SampleRate, second, 0, second.Length);
+            Array.Copy(samples, SampleRate + SampleRate / 10, second, 0, second.Length);
             double firstLufs = HiFiUtauLoudnessNormalizer.MeasureIntegratedLoudness(first, SampleRate);
             double secondLufs = HiFiUtauLoudnessNormalizer.MeasureIntegratedLoudness(second, SampleRate);
             Assert.InRange(firstLufs, -16.001, -15.999);
