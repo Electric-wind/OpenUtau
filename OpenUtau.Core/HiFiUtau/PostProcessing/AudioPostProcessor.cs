@@ -90,6 +90,81 @@ namespace OpenUtau.Core.HiFiUtau {
             Array.Copy(output, samples, nSamples);
         }
 
+        public static void ApplyVibraEnvelope(
+            float[] samples,
+            float[]? vibraEnvelope,
+            float[] pitchCents,
+            double[] pitchFrameTimes,
+            int sampleRate) {
+            if (samples == null || samples.Length == 0 ||
+                vibraEnvelope == null || vibraEnvelope.Length == 0 ||
+                pitchCents == null || pitchFrameTimes == null || sampleRate <= 0) {
+                return;
+            }
+
+            int frames = Math.Min(pitchCents.Length, pitchFrameTimes.Length);
+            if (frames < 2) {
+                return;
+            }
+            var controls = AudioPostProcessingDsp.ResampleCurve(vibraEnvelope, frames, 0f);
+            var pitchMidi = new double[frames];
+            for (int i = 0; i < frames; i++) {
+                pitchMidi[i] = pitchCents[i] / 100.0;
+            }
+
+            var pitchDerivative = Gradient(pitchMidi, pitchFrameTimes);
+            var gains = new double[frames];
+            for (int i = 0; i < frames; i++) {
+                double control = Math.Clamp(controls[i], -100f, 100f);
+                gains[i] = Math.Pow(5.0, 1e-4 * control * pitchDerivative[i]);
+            }
+
+            int frame = 0;
+            for (int i = 0; i < samples.Length; i++) {
+                double time = i / (double)sampleRate;
+                while (frame + 1 < frames && pitchFrameTimes[frame + 1] < time) {
+                    frame++;
+                }
+                double gain;
+                if (time <= pitchFrameTimes[0]) {
+                    gain = gains[0];
+                } else if (frame + 1 >= frames || time >= pitchFrameTimes[frames - 1]) {
+                    gain = gains[frames - 1];
+                } else {
+                    double interval = pitchFrameTimes[frame + 1] - pitchFrameTimes[frame];
+                    double ratio = interval > 0 ? (time - pitchFrameTimes[frame]) / interval : 0;
+                    gain = gains[frame] + (gains[frame + 1] - gains[frame]) * ratio;
+                }
+                samples[i] *= (float)gain;
+            }
+        }
+
+        static double[] Gradient(double[] values, double[] times) {
+            int length = values.Length;
+            var result = new double[length];
+            result[0] = Divide(values[1] - values[0], times[1] - times[0]);
+            result[length - 1] = Divide(
+                values[length - 1] - values[length - 2],
+                times[length - 1] - times[length - 2]);
+            for (int i = 1; i < length - 1; i++) {
+                double before = times[i] - times[i - 1];
+                double after = times[i + 1] - times[i];
+                if (before <= 0 || after <= 0) {
+                    result[i] = 0;
+                    continue;
+                }
+                double a = -after / (before * (before + after));
+                double b = (after - before) / (before * after);
+                double c = before / (after * (before + after));
+                result[i] = a * values[i - 1] + b * values[i] + c * values[i + 1];
+            }
+            return result;
+
+            static double Divide(double numerator, double denominator) {
+                return denominator > 0 ? numerator / denominator : 0;
+            }
+        }
+
         static void ApplyHnsepCurves(RenderPhrase phrase, float[] samples) {
             bool needBreath = HasNonDefaultCurve(phrase.breathiness, 0, 0.5f);
             bool needTension = HasNonDefaultCurve(phrase.tension, 0, 0.5f);
