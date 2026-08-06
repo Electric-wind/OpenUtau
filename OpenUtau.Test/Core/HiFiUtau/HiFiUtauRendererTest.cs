@@ -135,6 +135,10 @@ namespace OpenUtau.Core.HiFiUtau {
             var source = new[] { 0.25f, 0.5f, 0.75f };
             var phone = new HiFiUtauPhone {
                 PositionMs = 20,
+                LeadingMs = 20,
+                PreutterMs = 20,
+                Velocity = 100,
+                Volume = 1,
                 Envelope = new[] {
                     new Vector2(-20, 100),
                     new Vector2(-10, 100),
@@ -147,6 +151,56 @@ namespace OpenUtau.Core.HiFiUtau {
             HiFiUtauRenderer.ApplyDirectPhone(destination, source, phone, 0, 1000);
 
             Assert.Equal(new[] { 0.25f, 0.5f, 0.75f, -1f, -1f, -1f, -1f, -1f }, destination);
+        }
+
+        [Fact]
+        public void ApplyDirectPhone_UsesClassicSkipOver() {
+            var destination = new float[4];
+            var source = Enumerable.Range(0, 14).Select(value => (float)value).ToArray();
+            var phone = new HiFiUtauPhone {
+                PositionMs = 20,
+                LeadingMs = 20,
+                PreutterMs = 30,
+                Velocity = 100,
+                Volume = 1,
+                Envelope = new[] {
+                    new Vector2(-20, 100),
+                    new Vector2(-10, 100),
+                    new Vector2(0, 100),
+                    new Vector2(10, 100),
+                    new Vector2(20, 100),
+                },
+            };
+
+            HiFiUtauRenderer.ApplyDirectPhone(destination, source, phone, 0, 1000);
+
+            Assert.Equal(new[] { 10f, 11f, 12f, 13f }, destination);
+        }
+
+        [Fact]
+        public void ApplyDirectPhone_DoesNotEraseAudioAfterFadeOut() {
+            var destination = Enumerable.Repeat(10f, 5).ToArray();
+            var source = Enumerable.Repeat(2f, 5).ToArray();
+            var phone = new HiFiUtauPhone {
+                PositionMs = 0,
+                LeadingMs = 0,
+                PreutterMs = 0,
+                Velocity = 100,
+                Volume = 1,
+                Envelope = new[] {
+                    new Vector2(0, 100),
+                    new Vector2(1, 100),
+                    new Vector2(2, 100),
+                    new Vector2(3, 50),
+                    new Vector2(4, 0),
+                },
+            };
+
+            HiFiUtauRenderer.ApplyDirectPhone(destination, source, phone, 0, 1000);
+
+            Assert.Equal(2f, destination[0]);
+            Assert.Equal(6f, destination[3]);
+            Assert.Equal(10f, destination[4]);
         }
     }
 }

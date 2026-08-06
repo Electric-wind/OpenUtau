@@ -117,7 +117,6 @@ namespace OpenUtau.Core.HiFiUtau {
                             WriteCacheWave(rawWavPath, result.samples);
                         }
                         if (result.samples != null) {
-                            ApplyDirectPhones(result.samples, phones, phrase, HiFiUtauConfig.OutputSampleRate);
                             // HN-SEP processing with caching
                             var postCurves = PostProcessCurves.FromPhrase(phrase);
                             if (postCurves.NeedsHnsep) {
@@ -160,6 +159,9 @@ namespace OpenUtau.Core.HiFiUtau {
                                 result.samples,
                                 phones,
                                 samplesPerModelFrame);
+                            // Classic direct audio bypasses the resampler/model post-processing and VOL stage.
+                            // Its envelope already contains VOL, so insert it immediately before Dynamics.
+                            ApplyDirectPhones(result.samples, phones, phrase, HiFiUtauConfig.OutputSampleRate);
                             Renderers.ApplyDynamics(phrase, result);
                             WriteCacheWave(finalWavPath, result.samples);
                         }
@@ -175,7 +177,7 @@ namespace OpenUtau.Core.HiFiUtau {
         static ulong ComputeRawHash(RenderPhrase phrase) {
             using var stream = new MemoryStream();
             using (var writer = new BinaryWriter(stream)) {
-                writer.Write("hifiutau-v8-direct-phone-loudness");
+                writer.Write("hifiutau-v9-classic-direct");
                 writer.Write(phrase.preEffectHash);
                 WriteCurve(writer, phrase.pitches);
                 WriteCurve(writer, phrase.gender);
@@ -248,42 +250,52 @@ namespace OpenUtau.Core.HiFiUtau {
                 return;
             }
 
-            ApplyDirectEnvelope(source, phone.Envelope, sampleRate);
-            int destinationStart = (int)Math.Round(
-                (phone.PositionMs + phone.Envelope[0].X - phraseStartMs) * sampleRate / 1000.0,
+            double stretch = HiFiUtauMath.StretchFactor(phone.Velocity);
+            int skipOverSamples = (int)((phone.PreutterMs * stretch - phone.LeadingMs) * sampleRate / 1000.0);
+            int segmentStart = (int)Math.Round(
+                (phone.PositionMs - phone.LeadingMs - phraseStartMs) * sampleRate / 1000.0,
                 MidpointRounding.AwayFromZero);
-            int sourceStart = Math.Max(0, -destinationStart);
-            int destinationIndex = Math.Max(0, destinationStart);
-            int count = Math.Min(source.Length - sourceStart, destination.Length - destinationIndex);
-            if (count > 0) {
-                Array.Copy(source, sourceStart, destination, destinationIndex, count);
-            }
-        }
-
-        static void ApplyDirectEnvelope(float[] samples, System.Numerics.Vector2[] envelope, int sampleRate) {
-            double shift = -envelope[0].X;
+            double envelopeShift = -phone.Envelope[0].X;
+            double baseVolume = double.IsFinite(phone.Volume) ? Math.Max(0, phone.Volume) : 1.0;
             int nextPoint = 0;
-            for (int i = 0; i < samples.Length; i++) {
-                double position = i;
-                while (nextPoint < envelope.Length &&
-                    position > (envelope[nextPoint].X + shift) * sampleRate / 1000.0) {
+            for (int sourceIndex = 0; sourceIndex < source.Length; sourceIndex++) {
+                int destinationIndex = segmentStart + sourceIndex - skipOverSamples;
+                if (destinationIndex < 0 || destinationIndex >= destination.Length) {
+                    continue;
+                }
+
+                while (nextPoint < phone.Envelope.Length &&
+                    sourceIndex > EnvelopeSample(phone.Envelope[nextPoint].X)) {
                     nextPoint++;
                 }
 
                 double gain;
                 if (nextPoint == 0) {
-                    gain = envelope[0].Y / 100.0;
-                } else if (nextPoint >= envelope.Length) {
-                    gain = envelope[^1].Y / 100.0;
+                    gain = phone.Envelope[0].Y / 100.0;
+                } else if (nextPoint >= phone.Envelope.Length) {
+                    gain = phone.Envelope[^1].Y / 100.0;
                 } else {
-                    double x0 = (envelope[nextPoint - 1].X + shift) * sampleRate / 1000.0;
-                    double x1 = (envelope[nextPoint].X + shift) * sampleRate / 1000.0;
-                    double y0 = envelope[nextPoint - 1].Y / 100.0;
-                    double y1 = envelope[nextPoint].Y / 100.0;
-                    gain = x0 >= x1 ? y0 : y0 + (y1 - y0) * (position - x0) / (x1 - x0);
+                    double x0 = EnvelopeSample(phone.Envelope[nextPoint - 1].X);
+                    double x1 = EnvelopeSample(phone.Envelope[nextPoint].X);
+                    double y0 = phone.Envelope[nextPoint - 1].Y / 100.0;
+                    double y1 = phone.Envelope[nextPoint].Y / 100.0;
+                    gain = x0 >= x1
+                        ? y0
+                        : y0 + (y1 - y0) * (sourceIndex - x0) / (x1 - x0);
                 }
-                samples[i] *= (float)gain;
+
+                // Classic mixes separately enveloped segments. The HiFi model produces a single phrase,
+                // so use the normalized envelope as a replacement mask to retain overlapping consonants.
+                double blend = baseVolume > 1e-9
+                    ? Math.Clamp(gain / baseVolume, 0.0, 1.0)
+                    : 0.0;
+                destination[destinationIndex] =
+                    destination[destinationIndex] * (float)(1.0 - blend) +
+                    source[sourceIndex] * (float)gain;
             }
+
+            double EnvelopeSample(double x) =>
+                (x + envelopeShift) * sampleRate / 1000.0 + skipOverSamples;
         }
 
         static double[] GetPitchFrameTimes(RenderPhrase phrase) {

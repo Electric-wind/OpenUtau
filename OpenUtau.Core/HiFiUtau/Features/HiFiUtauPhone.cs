@@ -15,6 +15,7 @@ namespace OpenUtau.Core.HiFiUtau {
         public double ConsonantMs;
         public double CutoffMs;
         public double PreutterMs;
+        public double LeadingMs;
         public double OverlapMs;
         public double DurationMs;
         public double Velocity;
@@ -40,6 +41,7 @@ namespace OpenUtau.Core.HiFiUtau {
                 ConsonantMs = phone.oto?.Consonant ?? 0,
                 CutoffMs = phone.oto?.Cutoff ?? 0,
                 PreutterMs = phone.oto?.Preutter ?? phone.preutterMs,
+                LeadingMs = phone.leadingMs,
                 OverlapMs = phone.overlapMs,
                 DurationMs = phone.envelope[4].X,
                 PositionMs = phone.positionMs,
