@@ -19,6 +19,7 @@ namespace OpenUtau.Core.HiFiUtau {
         public double DurationMs;
         public double Velocity;
         public double Volume;
+        public bool Direct;
         public int ToneShift;
         public double Normalize;
         public int PhonemeType;
@@ -44,6 +45,7 @@ namespace OpenUtau.Core.HiFiUtau {
                 PositionMs = phone.positionMs,
                 Velocity = phone.velocity * 100.0,
                 Volume = phone.volume,
+                Direct = phone.direct,
                 ToneShift = phone.toneShift,
                 Normalize = GetFlag(phone, "P", 86),
                 PhonemeType = ParsePhtpFlag(phone),

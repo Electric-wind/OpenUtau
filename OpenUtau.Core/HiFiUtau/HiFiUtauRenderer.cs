@@ -34,6 +34,7 @@ namespace OpenUtau.Core.HiFiUtau {
             Format.Ustx.TENC,
             Format.Ustx.VOIC,
             Format.Ustx.NORM,
+            Format.Ustx.DIR,
             "phtp",
             "stm",
             "brel",
@@ -116,6 +117,7 @@ namespace OpenUtau.Core.HiFiUtau {
                             WriteCacheWave(rawWavPath, result.samples);
                         }
                         if (result.samples != null) {
+                            ApplyDirectPhones(result.samples, phones, phrase, HiFiUtauConfig.OutputSampleRate);
                             // HN-SEP processing with caching
                             var postCurves = PostProcessCurves.FromPhrase(phrase);
                             if (postCurves.NeedsHnsep) {
@@ -173,7 +175,7 @@ namespace OpenUtau.Core.HiFiUtau {
         static ulong ComputeRawHash(RenderPhrase phrase) {
             using var stream = new MemoryStream();
             using (var writer = new BinaryWriter(stream)) {
-                writer.Write("hifiutau-v7-phone-loudness");
+                writer.Write("hifiutau-v8-direct-phone-loudness");
                 writer.Write(phrase.preEffectHash);
                 WriteCurve(writer, phrase.pitches);
                 WriteCurve(writer, phrase.gender);
@@ -181,6 +183,7 @@ namespace OpenUtau.Core.HiFiUtau {
                 WriteCurve(writer, GetCurve(phrase, "gwlc"));
                 foreach (var phone in phrase.phones) {
                     writer.Write(phone.toneShift);
+                    writer.Write(phone.direct);
                 }
             }
             return XXH64.DigestOf(stream.ToArray());
@@ -198,6 +201,88 @@ namespace OpenUtau.Core.HiFiUtau {
             writer.Write(curve.Length);
             foreach (var value in curve) {
                 writer.Write(value);
+            }
+        }
+
+        static void ApplyDirectPhones(float[] samples, HiFiUtauPhone[] phones, RenderPhrase phrase, int sampleRate) {
+            if (samples == null || samples.Length == 0 || phones == null || phones.Length == 0 || sampleRate <= 0) {
+                return;
+            }
+
+            double phraseStartMs = phrase.positionMs - phrase.leadingMs;
+            foreach (var phone in phones) {
+                if (!phone.Direct || string.IsNullOrEmpty(phone.AudioPath)) {
+                    continue;
+                }
+
+                var source = HiFiUtauMath.ReadMonoSamples(phone.AudioPath, sampleRate);
+                var directSamples = SliceDirectSamples(source, phone, sampleRate);
+                ApplyDirectPhone(samples, directSamples, phone, phraseStartMs, sampleRate);
+            }
+        }
+
+        internal static float[] SliceDirectSamples(float[] source, HiFiUtauPhone phone, int sampleRate) {
+            if (source == null || source.Length == 0 || phone == null || sampleRate <= 0) {
+                return Array.Empty<float>();
+            }
+
+            int offset = HiFiUtauMath.ClampSample(phone.OffsetMs, sampleRate, source.Length);
+            double totalLengthMs = source.Length * 1000.0 / sampleRate;
+            int end = phone.CutoffMs >= 0
+                ? HiFiUtauMath.ClampSample(totalLengthMs - phone.CutoffMs, sampleRate, source.Length)
+                : HiFiUtauMath.ClampSample(phone.OffsetMs + Math.Abs(phone.CutoffMs), sampleRate, source.Length);
+            end = Math.Max(offset, end);
+            var result = new float[end - offset];
+            Array.Copy(source, offset, result, 0, result.Length);
+            return result;
+        }
+
+        internal static void ApplyDirectPhone(
+            float[] destination,
+            float[] source,
+            HiFiUtauPhone phone,
+            double phraseStartMs,
+            int sampleRate) {
+            if (destination == null || destination.Length == 0 || source == null || source.Length == 0 ||
+                phone == null || phone.Envelope == null || phone.Envelope.Length < 5 || sampleRate <= 0) {
+                return;
+            }
+
+            ApplyDirectEnvelope(source, phone.Envelope, sampleRate);
+            int destinationStart = (int)Math.Round(
+                (phone.PositionMs + phone.Envelope[0].X - phraseStartMs) * sampleRate / 1000.0,
+                MidpointRounding.AwayFromZero);
+            int sourceStart = Math.Max(0, -destinationStart);
+            int destinationIndex = Math.Max(0, destinationStart);
+            int count = Math.Min(source.Length - sourceStart, destination.Length - destinationIndex);
+            if (count > 0) {
+                Array.Copy(source, sourceStart, destination, destinationIndex, count);
+            }
+        }
+
+        static void ApplyDirectEnvelope(float[] samples, System.Numerics.Vector2[] envelope, int sampleRate) {
+            double shift = -envelope[0].X;
+            int nextPoint = 0;
+            for (int i = 0; i < samples.Length; i++) {
+                double position = i;
+                while (nextPoint < envelope.Length &&
+                    position > (envelope[nextPoint].X + shift) * sampleRate / 1000.0) {
+                    nextPoint++;
+                }
+
+                double gain;
+                if (nextPoint == 0) {
+                    gain = envelope[0].Y / 100.0;
+                } else if (nextPoint >= envelope.Length) {
+                    gain = envelope[^1].Y / 100.0;
+                } else {
+                    double x0 = (envelope[nextPoint - 1].X + shift) * sampleRate / 1000.0;
+                    double x1 = (envelope[nextPoint].X + shift) * sampleRate / 1000.0;
+                    double y0 = envelope[nextPoint - 1].Y / 100.0;
+                    double y1 = envelope[nextPoint].Y / 100.0;
+                    gain = x0 >= x1 ? y0 : y0 + (y1 - y0) * (position - x0) / (x1 - x0);
+                }
+                samples[i] *= (float)gain;
             }
         }
 
@@ -528,6 +613,7 @@ namespace OpenUtau.Core.HiFiUtau {
             return new[] {
                 new UExpressionDescriptor("phoneme type", "phtp", true, new[] { "normal", "follow next", "follow previous" }),
                 new UExpressionDescriptor("stretch mode", "stm", true, new[] { "none", "loop" }),
+                new UExpressionDescriptor("direct", Format.Ustx.DIR, false, new[] { "off", "on" }),
                 new UExpressionDescriptor("modulation plus", Format.Ustx.MODP, 0, 100, 0),
                 new UExpressionDescriptor {
                     name = "breath low (curve)",
@@ -566,7 +652,7 @@ namespace OpenUtau.Core.HiFiUtau {
                     isFlag = false,
                 },
                 new UExpressionDescriptor {
-                    name = "Vibra envelop (curve)",
+                    name = "vibra envelop (curve)",
                     abbr = "vibc",
                     type = UExpressionType.Curve,
                     min = -100,

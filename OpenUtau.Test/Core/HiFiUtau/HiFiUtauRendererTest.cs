@@ -1,5 +1,7 @@
 using System;
 using System.Linq;
+using System.Numerics;
+using OpenUtau.Core.Format;
 using OpenUtau.Core.Ustx;
 using Xunit;
 
@@ -53,15 +55,30 @@ namespace OpenUtau.Core.HiFiUtau {
 
         [Fact]
         public void SuggestedExpressions_ContainsVibraEnvelopeCurve() {
-            var descriptor = new HiFiUtauRenderer()
+            var renderer = new HiFiUtauRenderer();
+            var descriptor = renderer
                 .GetSuggestedExpressions(null, null)
                 .Single(expression => expression.abbr == "vibc");
 
-            Assert.Equal("Vibra envelop (curve)", descriptor.name);
+            Assert.Equal("vibra envelop (curve)", descriptor.name);
             Assert.Equal(UExpressionType.Curve, descriptor.type);
             Assert.Equal(-100, descriptor.min);
             Assert.Equal(100, descriptor.max);
             Assert.Equal(0, descriptor.defaultValue);
+            Assert.False(descriptor.isFlag);
+        }
+
+        [Fact]
+        public void SuggestedExpressions_ContainsDirectOption() {
+            var renderer = new HiFiUtauRenderer();
+            var descriptor = renderer
+                .GetSuggestedExpressions(null, null)
+                .Single(expression => expression.abbr == OpenUtau.Core.Format.Ustx.DIR);
+
+            Assert.True(renderer.SupportsExpression(descriptor));
+            Assert.Equal("direct", descriptor.name);
+            Assert.Equal(UExpressionType.Options, descriptor.type);
+            Assert.Equal(new[] { "off", "on" }, descriptor.options);
             Assert.False(descriptor.isFlag);
         }
 
@@ -94,6 +111,42 @@ namespace OpenUtau.Core.HiFiUtau {
                 100);
 
             Assert.Equal(expected, samples);
+        }
+
+        [Fact]
+        public void SliceDirectSamples_UsesOtoOffsetAndCutoff() {
+            var source = Enumerable.Range(0, 100).Select(value => (float)value).ToArray();
+            var phone = new HiFiUtauPhone {
+                OffsetMs = 10,
+                CutoffMs = 20,
+            };
+
+            var result = HiFiUtauRenderer.SliceDirectSamples(source, phone, 1000);
+
+            Assert.Equal(70, result.Length);
+            Assert.Equal(10f, result[0]);
+            Assert.Equal(79f, result[^1]);
+        }
+
+        [Fact]
+        public void ApplyDirectPhone_ReplacesAudioAtEnvelopeStart() {
+            var destination = new float[8];
+            Array.Fill(destination, -1f);
+            var source = new[] { 0.25f, 0.5f, 0.75f };
+            var phone = new HiFiUtauPhone {
+                PositionMs = 20,
+                Envelope = new[] {
+                    new Vector2(-20, 100),
+                    new Vector2(-10, 100),
+                    new Vector2(0, 100),
+                    new Vector2(10, 100),
+                    new Vector2(20, 100),
+                },
+            };
+
+            HiFiUtauRenderer.ApplyDirectPhone(destination, source, phone, 0, 1000);
+
+            Assert.Equal(new[] { 0.25f, 0.5f, 0.75f, -1f, -1f, -1f, -1f, -1f }, destination);
         }
     }
 }
