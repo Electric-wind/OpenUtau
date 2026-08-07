@@ -41,7 +41,6 @@ namespace OpenUtau.Core.HiFiUtau {
             "breh",
             "bric",
             "gwlc",
-            "vibc",
         };
 
         public USingerType SingerType => USingerType.Classic;
@@ -134,14 +133,6 @@ namespace OpenUtau.Core.HiFiUtau {
                                     postCurves.Brel, postCurves.Breh, postCurves.Bri);
                             } else {
                                 AudioPostProcessor.Apply(phrase, result);
-                            }
-                            if (postCurves.NeedsVibraEnvelope) {
-                                AudioPostProcessor.ApplyVibraEnvelope(
-                                    result.samples,
-                                    postCurves.VibraEnvelope,
-                                    phrase.pitches,
-                                    GetPitchFrameTimes(phrase),
-                                    HiFiUtauConfig.OutputSampleRate);
                             }
                             if (postCurves.NeedsGrowl) {
                                 var pitchHzCurve = AudioPostProcessingDsp.PitchHzCurve(phrase, result.samples.Length);
@@ -296,16 +287,6 @@ namespace OpenUtau.Core.HiFiUtau {
 
             double EnvelopeSample(double x) =>
                 (x + envelopeShift) * sampleRate / 1000.0 + skipOverSamples;
-        }
-
-        static double[] GetPitchFrameTimes(RenderPhrase phrase) {
-            var times = new double[phrase.pitches.Length];
-            int startTick = phrase.position - phrase.leading;
-            double audioStartMs = phrase.positionMs - phrase.leadingMs;
-            for (int i = 0; i < times.Length; i++) {
-                times[i] = (phrase.timeAxis.TickPosToMsPos(startTick + i * DynamicInterval) - audioStartMs) / 1000.0;
-            }
-            return times;
         }
 
         static HiFiUtauModel GetModel(string modelPath) {
@@ -663,48 +644,33 @@ namespace OpenUtau.Core.HiFiUtau {
                     defaultValue = 0,
                     isFlag = false,
                 },
-                new UExpressionDescriptor {
-                    name = "vibra envelop (curve)",
-                    abbr = "vibc",
-                    type = UExpressionType.Curve,
-                    min = -100,
-                    max = 100,
-                    defaultValue = 0,
-                    isFlag = false,
-                },
             };
         }
 
         public override string ToString() => Renderers.HIFIUTAU;
 
         readonly struct PostProcessCurves {
-            PostProcessCurves(float[]? brel, float[]? breh, float[]? bri, float[]? growl, float[]? vibraEnvelope,
-                bool needsHnsep, bool needsGrowl, bool needsVibraEnvelope) {
+            PostProcessCurves(float[]? brel, float[]? breh, float[]? bri, float[]? growl, bool needsHnsep, bool needsGrowl) {
                 Brel = brel;
                 Breh = breh;
                 Bri = bri;
                 Growl = growl;
-                VibraEnvelope = vibraEnvelope;
                 NeedsHnsep = needsHnsep;
                 NeedsGrowl = needsGrowl;
-                NeedsVibraEnvelope = needsVibraEnvelope;
             }
 
             public readonly float[]? Brel;
             public readonly float[]? Breh;
             public readonly float[]? Bri;
             public readonly float[]? Growl;
-            public readonly float[]? VibraEnvelope;
             public readonly bool NeedsHnsep;
             public readonly bool NeedsGrowl;
-            public readonly bool NeedsVibraEnvelope;
 
             public static PostProcessCurves FromPhrase(RenderPhrase phrase) {
                 var brel = GetCurve(phrase, "brel");
                 var breh = GetCurve(phrase, "breh");
                 var bri = GetCurve(phrase, "bric");
                 var growl = GetCurve(phrase, "gwlc");
-                var vibraEnvelope = GetCurve(phrase, "vibc");
                 bool needsHnsep =
                     AudioPostProcessor.HasNonDefaultCurve(phrase.breathiness, 0, 0.5f) ||
                     AudioPostProcessor.HasNonDefaultCurve(phrase.tension, 0, 0.5f) ||
@@ -713,9 +679,7 @@ namespace OpenUtau.Core.HiFiUtau {
                     AudioPostProcessor.HasNonDefaultCurve(breh, 0, 0.5f) ||
                     AudioPostProcessor.HasNonDefaultCurve(bri, 0, 0.5f);
                 bool needsGrowl = AudioPostProcessor.HasNonDefaultCurve(growl, 0, 0.5f);
-                bool needsVibraEnvelope = AudioPostProcessor.HasNonDefaultCurve(vibraEnvelope, 0, 0.5f);
-                return new PostProcessCurves(
-                    brel, breh, bri, growl, vibraEnvelope, needsHnsep, needsGrowl, needsVibraEnvelope);
+                return new PostProcessCurves(brel, breh, bri, growl, needsHnsep, needsGrowl);
             }
         }
     }
