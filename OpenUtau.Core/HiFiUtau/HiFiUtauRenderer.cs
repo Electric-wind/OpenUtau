@@ -34,6 +34,7 @@ namespace OpenUtau.Core.HiFiUtau {
             Format.Ustx.TENC,
             Format.Ustx.VOIC,
             Format.Ustx.NORM,
+            Format.Ustx.DIR,
             "phtp",
             "stm",
             "brel",
@@ -77,6 +78,7 @@ namespace OpenUtau.Core.HiFiUtau {
                     }
 
                     var model = GetModel(modelPath);
+                    var phones = HiFiUtauPhone.CreateAll(phrase);
 
                     // New cache directory structure
                     var cacheDir = Path.Join(PathManager.Inst.CachePath, "hifiutau");
@@ -89,7 +91,7 @@ namespace OpenUtau.Core.HiFiUtau {
 
                     var rawHash = ComputeRawHash(phrase);
                     var rawWavPath = Path.Join(rawDir, $"{model.Hash:x16}-{rawHash:x16}.wav");
-                    var finalWavPath = Path.Join(finalDir, $"{model.Hash:x16}-{phrase.hash:x16}.wav");
+                    var finalWavPath = Path.Join(finalDir, $"{model.Hash:x16}-{phrase.hash:x16}-classic-direct-v1.wav");
                     var hnsepHarmonicPath = Path.Join(hnsepDir, $"harmonic-{model.Hash:x16}-{rawHash:x16}.wav");
                     var hnsepNoisePath = Path.Join(hnsepDir, $"noise-{model.Hash:x16}-{rawHash:x16}.wav");
                     phrase.AddCacheFile(finalWavPath);
@@ -105,7 +107,6 @@ namespace OpenUtau.Core.HiFiUtau {
                             result.samples = LoadCacheWave(rawWavPath);
                         }
                         if (result.samples == null) {
-                            var phones = HiFiUtauPhone.CreateAll(phrase);
                             result.samples = RenderFeaturePipeline(phones, phrase, model, cancellation.Token);
                             if (cancellation.IsCancellationRequested) {
                                 return result;
@@ -132,11 +133,12 @@ namespace OpenUtau.Core.HiFiUtau {
                             } else {
                                 AudioPostProcessor.Apply(phrase, result);
                             }
-                            Renderers.ApplyDynamics(phrase, result);
                             if (postCurves.NeedsGrowl) {
                                 var pitchHzCurve = AudioPostProcessingDsp.PitchHzCurve(phrase, result.samples.Length);
                                 AudioPostProcessor.ApplyGrowl(result.samples, postCurves.Growl, AudioPostProcessingDsp.SampleRate, pitchHzCurve);
                             }
+                            ApplyDirectPhones(result.samples, phones, phrase, HiFiUtauConfig.OutputSampleRate);
+                            Renderers.ApplyDynamics(phrase, result);
                             WriteCacheWave(finalWavPath, result.samples);
                         }
                     }
@@ -177,6 +179,98 @@ namespace OpenUtau.Core.HiFiUtau {
             foreach (var value in curve) {
                 writer.Write(value);
             }
+        }
+
+        static void ApplyDirectPhones(float[] samples, HiFiUtauPhone[] phones, RenderPhrase phrase, int sampleRate) {
+            if (samples == null || samples.Length == 0 || phones == null || phones.Length == 0 || sampleRate <= 0) {
+                return;
+            }
+
+            double phraseStartMs = phrase.positionMs - phrase.leadingMs;
+            foreach (var phone in phones) {
+                if (!phone.Direct || string.IsNullOrEmpty(phone.AudioPath)) {
+                    continue;
+                }
+
+                var source = HiFiUtauMath.ReadMonoSamples(phone.AudioPath, sampleRate);
+                var directSamples = SliceDirectSamples(source, phone, sampleRate);
+                ApplyDirectPhone(samples, directSamples, phone, phraseStartMs, sampleRate);
+            }
+        }
+
+        internal static float[] SliceDirectSamples(float[] source, HiFiUtauPhone phone, int sampleRate) {
+            if (source == null || source.Length == 0 || phone == null || sampleRate <= 0) {
+                return Array.Empty<float>();
+            }
+
+            int offset = HiFiUtauMath.ClampSample(phone.OffsetMs, sampleRate, source.Length);
+            double totalLengthMs = source.Length * 1000.0 / sampleRate;
+            int end = phone.CutoffMs >= 0
+                ? HiFiUtauMath.ClampSample(totalLengthMs - phone.CutoffMs, sampleRate, source.Length)
+                : HiFiUtauMath.ClampSample(phone.OffsetMs + Math.Abs(phone.CutoffMs), sampleRate, source.Length);
+            end = Math.Max(offset, end);
+            var result = new float[end - offset];
+            Array.Copy(source, offset, result, 0, result.Length);
+            return result;
+        }
+
+        internal static void ApplyDirectPhone(
+            float[] destination,
+            float[] source,
+            HiFiUtauPhone phone,
+            double phraseStartMs,
+            int sampleRate) {
+            if (destination == null || destination.Length == 0 || source == null || source.Length == 0 ||
+                phone == null || phone.Envelope == null || phone.Envelope.Length < 5 || sampleRate <= 0) {
+                return;
+            }
+
+            double stretch = HiFiUtauMath.StretchFactor(phone.Velocity);
+            int skipOverSamples = (int)((phone.PreutterMs * stretch - phone.LeadingMs) * sampleRate / 1000.0);
+            int segmentStart = (int)Math.Round(
+                (phone.PositionMs - phone.LeadingMs - phraseStartMs) * sampleRate / 1000.0,
+                MidpointRounding.AwayFromZero);
+            double envelopeShift = -phone.Envelope[0].X;
+            double baseVolume = double.IsFinite(phone.Volume) ? Math.Max(0, phone.Volume) : 1.0;
+            int nextPoint = 0;
+            for (int sourceIndex = 0; sourceIndex < source.Length; sourceIndex++) {
+                int destinationIndex = segmentStart + sourceIndex - skipOverSamples;
+                if (destinationIndex < 0 || destinationIndex >= destination.Length) {
+                    continue;
+                }
+
+                while (nextPoint < phone.Envelope.Length &&
+                    sourceIndex > EnvelopeSample(phone.Envelope[nextPoint].X)) {
+                    nextPoint++;
+                }
+
+                double gain;
+                if (nextPoint == 0) {
+                    gain = phone.Envelope[0].Y / 100.0;
+                } else if (nextPoint >= phone.Envelope.Length) {
+                    gain = phone.Envelope[^1].Y / 100.0;
+                } else {
+                    double x0 = EnvelopeSample(phone.Envelope[nextPoint - 1].X);
+                    double x1 = EnvelopeSample(phone.Envelope[nextPoint].X);
+                    double y0 = phone.Envelope[nextPoint - 1].Y / 100.0;
+                    double y1 = phone.Envelope[nextPoint].Y / 100.0;
+                    gain = x0 >= x1
+                        ? y0
+                        : y0 + (y1 - y0) * (sourceIndex - x0) / (x1 - x0);
+                }
+
+                // Classic mixes independently enveloped segments. Blend the direct segment into the
+                // phrase-level model output so its fade-out does not erase the next consonant.
+                double blend = baseVolume > 1e-9
+                    ? Math.Clamp(gain / baseVolume, 0.0, 1.0)
+                    : 0.0;
+                destination[destinationIndex] =
+                    destination[destinationIndex] * (float)(1.0 - blend) +
+                    source[sourceIndex] * (float)gain;
+            }
+
+            double EnvelopeSample(double x) =>
+                (x + envelopeShift) * sampleRate / 1000.0 + skipOverSamples;
         }
 
         static HiFiUtauModel GetModel(string modelPath) {
@@ -442,6 +536,7 @@ namespace OpenUtau.Core.HiFiUtau {
             return new[] {
                 new UExpressionDescriptor("phoneme type", "phtp", true, new[] { "normal", "follow next", "follow previous" }),
                 new UExpressionDescriptor("stretch mode", "stm", true, new[] { "none", "loop" }),
+                new UExpressionDescriptor("direct", Format.Ustx.DIR, false, new[] { "off", "on" }),
                 new UExpressionDescriptor("modulation plus", Format.Ustx.MODP, 0, 100, 0),
                 new UExpressionDescriptor {
                     name = "breath low (curve)",
