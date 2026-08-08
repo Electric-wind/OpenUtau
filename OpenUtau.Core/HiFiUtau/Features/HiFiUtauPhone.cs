@@ -15,10 +15,12 @@ namespace OpenUtau.Core.HiFiUtau {
         public double ConsonantMs;
         public double CutoffMs;
         public double PreutterMs;
+        public double LeadingMs;
         public double OverlapMs;
         public double DurationMs;
         public double Velocity;
         public double Volume;
+        public bool Direct;
         public int ToneShift;
         public double Normalize;
         public int PhonemeType;
@@ -39,11 +41,13 @@ namespace OpenUtau.Core.HiFiUtau {
                 ConsonantMs = phone.oto?.Consonant ?? 0,
                 CutoffMs = phone.oto?.Cutoff ?? 0,
                 PreutterMs = phone.oto?.Preutter ?? phone.preutterMs,
+                LeadingMs = phone.leadingMs,
                 OverlapMs = phone.overlapMs,
                 DurationMs = phone.envelope[4].X,
                 PositionMs = phone.positionMs,
                 Velocity = phone.velocity * 100.0,
                 Volume = phone.volume,
+                Direct = phone.direct,
                 ToneShift = phone.toneShift,
                 Normalize = GetFlag(phone, "P", 0),
                 PhonemeType = ParsePhtpFlag(phone),
