@@ -13,6 +13,7 @@ namespace OpenUtau.Core.HiFiUtau {
         const double BlockSeconds = 0.400;
         const double AbsoluteGateLufs = -70.0;
         const double SilenceThresholdDb = -52.0;
+        const double MinimumGainTransitionMs = 5.0;
 
         public static double NormalizeInPlace(
             float[] samples,
@@ -82,7 +83,10 @@ namespace OpenUtau.Core.HiFiUtau {
                 return;
             }
 
-            ApplySegmentGains(samples, segments);
+            int minimumTransitionSamples = Math.Max(
+                1,
+                (int)Math.Round(sampleRate * MinimumGainTransitionMs / 1000.0));
+            ApplySegmentGains(samples, segments, minimumTransitionSamples);
         }
 
         public static double MeasureIntegratedLoudness(float[] samples, int sampleRate) {
@@ -174,32 +178,66 @@ namespace OpenUtau.Core.HiFiUtau {
             return double.IsFinite(gainDb) ? gainDb : 0.0;
         }
 
-        static void ApplySegmentGains(float[] samples, List<GainSegment> segments) {
+        static void ApplySegmentGains(
+            float[] samples,
+            List<GainSegment> segments,
+            int minimumTransitionSamples) {
             var gains = new float[samples.Length];
             float previousGain = segments[0].Gain;
             Array.Fill(gains, previousGain);
+            int previousStart = segments[0].Start;
             int previousEnd = segments[0].End;
 
             for (int i = 1; i < segments.Count; i++) {
                 var segment = segments[i];
-                if (segment.Start < previousEnd) {
-                    int overlapEnd = Math.Min(previousEnd, segment.End);
-                    int overlapSamples = overlapEnd - segment.Start;
-                    float overlapStartGain = gains[segment.Start];
-                    for (int j = segment.Start; j < overlapEnd; j++) {
-                        float alpha = overlapSamples == 1
-                            ? 1f
-                            : (j - segment.Start) / (float)(overlapSamples - 1);
-                        gains[j] = overlapStartGain + (segment.Gain - overlapStartGain) * alpha;
-                    }
-                    Array.Fill(gains, segment.Gain, overlapEnd, segment.End - overlapEnd);
-                } else {
-                    Array.Fill(gains, previousGain, previousEnd, segment.Start - previousEnd);
-                    Array.Fill(gains, segment.Gain, segment.Start, segment.End - segment.Start);
+                int start = Math.Clamp(segment.Start, 0, samples.Length);
+                int end = Math.Clamp(segment.End, start, samples.Length);
+                if (end <= start) {
+                    continue;
                 }
 
+                int transitionStart;
+                int transitionEnd;
+                if (start < previousEnd) {
+                    // A rounded model-frame boundary can leave only one or two
+                    // overlap samples. Extend that transition into both phones.
+                    int overlapEnd = Math.Min(previousEnd, end);
+                    transitionStart = start;
+                    transitionEnd = overlapEnd;
+                    if (transitionEnd - transitionStart < minimumTransitionSamples) {
+                        int center = start;
+                        int half = minimumTransitionSamples / 2;
+                        transitionStart = Math.Max(previousStart, center - half);
+                        transitionEnd = Math.Min(end, transitionStart + minimumTransitionSamples);
+                        transitionStart = Math.Max(previousStart, transitionEnd - minimumTransitionSamples);
+                    }
+                } else {
+                    Array.Fill(gains, previousGain, previousEnd, start - previousEnd);
+                    Array.Fill(gains, segment.Gain, start, end - start);
+                    if (segment.End >= previousEnd) {
+                        previousStart = start;
+                        previousEnd = end;
+                        previousGain = segment.Gain;
+                    }
+                    continue;
+                }
+
+                transitionStart = Math.Clamp(transitionStart, previousStart, end);
+                transitionEnd = Math.Clamp(transitionEnd, transitionStart, end);
+                float fromGain = gains[transitionStart];
+                int transitionSamples = transitionEnd - transitionStart;
+                for (int j = transitionStart; j < transitionEnd; j++) {
+                    float alpha = transitionSamples <= 1
+                        ? 1f
+                        : (j - transitionStart) / (float)(transitionSamples - 1);
+                    float smoothAlpha = 0.5f - 0.5f * (float)Math.Cos(Math.PI * alpha);
+                    gains[j] = fromGain + (segment.Gain - fromGain) * smoothAlpha;
+                }
+                Array.Fill(gains, segment.Gain, transitionEnd, end - transitionEnd);
+
                 if (segment.End >= previousEnd) {
-                    previousEnd = segment.End;
+                    previousStart = start;
+                    previousEnd = end;
                     previousGain = segment.Gain;
                 }
             }
