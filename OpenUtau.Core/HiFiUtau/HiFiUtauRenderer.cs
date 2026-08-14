@@ -112,7 +112,11 @@ namespace OpenUtau.Core.HiFiUtau {
                             if (cancellation.IsCancellationRequested) {
                                 return result;
                             }
-                            HiFiUtauMath.ApplyPhraseEdgeEnvelope(phones, result.samples, HiFiUtauConfig.OutputSampleRate);
+                            HiFiUtauMath.ApplyPhraseEdgeEnvelope(
+                                phones,
+                                result.samples,
+                                HiFiUtauConfig.OutputSampleRate,
+                                model.Config.ModelHop * (double)HiFiUtauConfig.OutputSampleRate / model.Config.SampleRate);
                             WriteCacheWave(rawWavPath, result.samples);
                         }
                         if (result.samples != null) {
@@ -160,7 +164,7 @@ namespace OpenUtau.Core.HiFiUtau {
         static ulong ComputeRawHash(RenderPhrase phrase) {
             using var stream = new MemoryStream();
             using (var writer = new BinaryWriter(stream)) {
-                writer.Write("hifiutau-v11-zero-overlap-mel-envelope");
+                writer.Write("hifiutau-v12-wave-envelope-release");
                 writer.Write(phrase.preEffectHash);
                 WriteCurve(writer, phrase.pitches);
                 WriteCurve(writer, phrase.gender);
@@ -356,8 +360,8 @@ namespace OpenUtau.Core.HiFiUtau {
                 ApplyPerPhoneControls(phone);
             }
             MatchPhtp(phones, model.Config.MsPerFeatureFrame);
-            for (int i = 0; i < phones.Length; i++) {
-                ApplyPhoneEnvelope(phones, i);
+            foreach (var phone in phones) {
+                ApplyPhoneEnvelope(phone);
             }
             var f0 = SampleF0(phrase, model.Config.ModelHop, model.Config.SampleRate);
             var feat = model.ProcessFeatureSplice(phones);
@@ -520,20 +524,13 @@ namespace OpenUtau.Core.HiFiUtau {
             }
         }
 
-        static void ApplyPhoneEnvelope(HiFiUtauPhone[] phones, int index) {
-            var phone = phones[index];
+        static void ApplyPhoneEnvelope(HiFiUtauPhone phone) {
             if (phone.Mel == null || phone.Mel.GetLength(1) == 0) {
                 return;
             }
-            // Apply the envelope after phtp. CrossFadeFeat supplies outer ramps
-            // for overlaps; explicit mel ramps protect internal zero-overlap edges.
+            // Apply the crossfade envelope after phtp. VOL is applied to the synthesized waveform later.
             if (phone.Envelope != null && phone.Envelope.Length >= 5) {
-                bool applyFadeIn = index > 0 &&
-                    phones[index - 1].ModelEndFrame <= phone.ModelStartFrame;
-                bool applyFadeOut = index + 1 < phones.Length &&
-                    phone.ModelEndFrame <= phones[index + 1].ModelStartFrame;
-                HiFiUtauMath.ApplyEnvelopeToMel(
-                    phone.Mel, phone.Envelope, applyFadeIn, applyFadeOut);
+                HiFiUtauMath.ApplyEnvelopeToMel(phone.Mel, phone.Envelope);
             }
         }
 
