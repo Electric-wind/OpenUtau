@@ -184,7 +184,11 @@ namespace OpenUtau.Core.HiFiUtau {
             return curve[i0] + (curve[i1] - curve[i0]) * frac;
         }
 
-        public static void ApplyEnvelopeToMel(float[,] mel, Vector2[] envelope) {
+        public static void ApplyEnvelopeToMel(
+            float[,] mel,
+            Vector2[] envelope,
+            bool applyFadeIn = false,
+            bool applyFadeOut = false) {
             int totalFrames = mel.GetLength(1);
             if (totalFrames <= 0 || envelope == null || envelope.Length < 5) {
                 return;
@@ -200,20 +204,26 @@ namespace OpenUtau.Core.HiFiUtau {
             double f2 = (envelope[2].X - envelope[0].X) / envRange * (totalFrames - 1);
             double f3 = (envelope[3].X - envelope[0].X) / envRange * (totalFrames - 1);
 
-            // Envelope rules:
-            // p0→p1: crossfade region, use p1.Y constant
+            // CrossFadeFeat normally supplies the outer ramps. Apply the explicit
+            // SharpWavtool slopes when an internal boundary has no overlap.
+            float y0 = envelope[0].Y / 100f;
             // p1→p2: linear transition p1.Y → p2.Y
             // p2→p3: linear transition p2.Y → p3.Y
-            // p3→p4: crossfade region, use p3.Y constant
             float y1 = envelope[1].Y / 100f;
             float y2 = envelope[2].Y / 100f;
             float y3 = envelope[3].Y / 100f;
+            float y4 = envelope[4].Y / 100f;
 
             var gains = new float[totalFrames];
             for (int t = 0; t < totalFrames; t++) {
                 float gain;
                 if (t <= f1) {
-                    gain = y1;
+                    if (applyFadeIn) {
+                        double frac = f1 > 0 ? t / f1 : 1.0;
+                        gain = y0 + (float)((y1 - y0) * frac);
+                    } else {
+                        gain = y1;
+                    }
                 } else if (t <= f2) {
                     double frac = f2 > f1 ? (t - f1) / (f2 - f1) : 1.0;
                     gain = y1 + (float)((y2 - y1) * frac);
@@ -221,7 +231,14 @@ namespace OpenUtau.Core.HiFiUtau {
                     double frac = f3 > f2 ? (t - f2) / (f3 - f2) : 1.0;
                     gain = y2 + (float)((y3 - y2) * frac);
                 } else {
-                    gain = y3;
+                    if (applyFadeOut) {
+                        double frac = totalFrames - 1 > f3
+                            ? (t - f3) / (totalFrames - 1 - f3)
+                            : 1.0;
+                        gain = y3 + (float)((y4 - y3) * frac);
+                    } else {
+                        gain = y3;
+                    }
                 }
                 gains[t] = gain;
             }
