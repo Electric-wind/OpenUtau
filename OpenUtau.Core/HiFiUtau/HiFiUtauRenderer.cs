@@ -138,18 +138,10 @@ namespace OpenUtau.Core.HiFiUtau {
                                 var pitchHzCurve = AudioPostProcessingDsp.PitchHzCurve(phrase, result.samples.Length);
                                 AudioPostProcessor.ApplyGrowl(result.samples, postCurves.Growl, AudioPostProcessingDsp.SampleRate, pitchHzCurve);
                             }
-                            double samplesPerModelFrame =
-                                model.Config.ModelHop * (double)HiFiUtauConfig.OutputSampleRate / model.Config.SampleRate;
-                            HiFiUtauLoudnessNormalizer.NormalizePhonesInPlace(
-                                result.samples,
-                                phones,
-                                HiFiUtauConfig.OutputSampleRate,
-                                samplesPerModelFrame);
-                            // Keep VOL outside loudness normalization so its percentage remains a linear output ratio.
                             ApplyPhoneVolumes(
                                 result.samples,
                                 phones,
-                                samplesPerModelFrame);
+                                model.Config.ModelHop * (double)HiFiUtauConfig.OutputSampleRate / model.Config.SampleRate);
                             // Classic direct audio bypasses the resampler/model post-processing and VOL stage.
                             // Its envelope already contains VOL, so insert it immediately before Dynamics.
                             ApplyDirectPhones(result.samples, phones, phrase, HiFiUtauConfig.OutputSampleRate);
@@ -168,7 +160,7 @@ namespace OpenUtau.Core.HiFiUtau {
         static ulong ComputeRawHash(RenderPhrase phrase) {
             using var stream = new MemoryStream();
             using (var writer = new BinaryWriter(stream)) {
-                writer.Write("hifiutau-v9-classic-direct");
+                writer.Write("hifiutau-v10-mel-normalization-classic-direct");
                 writer.Write(phrase.preEffectHash);
                 WriteCurve(writer, phrase.pitches);
                 WriteCurve(writer, phrase.gender);
@@ -447,6 +439,14 @@ namespace OpenUtau.Core.HiFiUtau {
         static void ApplyPerPhoneControls(HiFiUtauPhone phone) {
             if (phone.Mel == null || phone.Mel.GetLength(1) == 0) {
                 return;
+            }
+            var normalize = phone.Normalize / 100.0;
+            if (normalize > 0) {
+                double rms = HiFiUtauMath.MelRms(phone.Mel);
+                if (rms > 1e-12) {
+                    double target = rms * (1 - normalize) + 0.5 * normalize;
+                    HiFiUtauMath.AddLogGain(phone.Mel, Math.Log(target / rms));
+                }
             }
             if (phone.Gender != null && phone.Gender.Any(value => Math.Abs(value) > 0.001f)) {
                 HiFiUtauMath.WarpMelFrequency(phone.Mel, phone.Gender.Select(value => -value / 100f).ToArray());

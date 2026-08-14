@@ -49,7 +49,7 @@ namespace OpenUtau.Core.HiFiUtau {
                 Volume = phone.volume,
                 Direct = phone.direct,
                 ToneShift = phone.toneShift,
-                Normalize = GetFlag(phone, "P", 86),
+                Normalize = GetFlag(phone, "P", 0),
                 PhonemeType = ParsePhtpFlag(phone),
                 StretchMode = ParseStmFlag(phone),
                 Envelope = phone.envelope,
