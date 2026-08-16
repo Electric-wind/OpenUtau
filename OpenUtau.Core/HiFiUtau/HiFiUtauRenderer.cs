@@ -164,7 +164,7 @@ namespace OpenUtau.Core.HiFiUtau {
         static ulong ComputeRawHash(RenderPhrase phrase) {
             using var stream = new MemoryStream();
             using (var writer = new BinaryWriter(stream)) {
-                writer.Write("hifiutau-v15-fixed-region-prefix");
+                writer.Write("hifiutau-v16-phone-mel-loudness");
                 writer.Write(phrase.preEffectHash);
                 WriteCurve(writer, phrase.pitches);
                 WriteCurve(writer, phrase.gender);
@@ -351,12 +351,18 @@ namespace OpenUtau.Core.HiFiUtau {
             HiFiUtauModel model,
             CancellationToken cancellation) {
             var melExtractor = new HiFiUtauMelExtractor(model.Config);
+            var loudnessGainCache = new Dictionary<
+                (string AudioPath, int StartSample, int EndSample, double Strength), double>();
             foreach (var phone in phones) {
                 if (cancellation.IsCancellationRequested) {
                     return Array.Empty<float>();
                 }
-                phone.Mel = ExtractFeatureMel(phone, model.Config, melExtractor);
+                phone.Mel = ExtractFeatureMel(
+                    phone, model.Config, melExtractor, loudnessGainCache);
                 phone.Gender = SamplePhoneGender(phrase, phone, model.Config);
+            }
+            HiFiUtauMelLoudnessNormalizer.ApplyPhoneMelGains(phones);
+            foreach (var phone in phones) {
                 ApplyPerPhoneControls(phone);
             }
             MatchPhtp(phones, model.Config.MsPerFeatureFrame);
@@ -368,7 +374,11 @@ namespace OpenUtau.Core.HiFiUtau {
             return model.Synthesize(feat, f0);
         }
 
-        float[,] ExtractFeatureMel(HiFiUtauPhone phone, HiFiUtauConfig config, HiFiUtauMelExtractor melExtractor) {
+        float[,] ExtractFeatureMel(
+            HiFiUtauPhone phone,
+            HiFiUtauConfig config,
+            HiFiUtauMelExtractor melExtractor,
+            Dictionary<(string AudioPath, int StartSample, int EndSample, double Strength), double> loudnessGainCache) {
             var audio = HiFiUtauMath.ReadMonoSamples(phone.AudioPath, config.SampleRate);
             double totalLenMs = audio.Length * 1000.0 / config.SampleRate;
             int startSample = HiFiUtauMath.ClampSample(phone.OffsetMs, config.SampleRate, audio.Length);
@@ -378,6 +388,21 @@ namespace OpenUtau.Core.HiFiUtau {
                 : HiFiUtauMath.ClampSample(phone.OffsetMs + Math.Abs(phone.CutoffMs), config.SampleRate, audio.Length);
             if (endSample < consonantSample) {
                 endSample = consonantSample;
+            }
+
+            phone.LoudnessGainDb = 0;
+            if (!phone.Direct && phone.Normalize > 0 && endSample > startSample) {
+                var cacheKey = (phone.AudioPath, startSample, endSample, phone.Normalize);
+                if (!loudnessGainCache.TryGetValue(cacheKey, out double gainDb)) {
+                    gainDb = HiFiUtauMelLoudnessNormalizer.CalculateGainDb(
+                        audio,
+                        startSample,
+                        endSample - startSample,
+                        config.SampleRate,
+                        phone.Normalize);
+                    loudnessGainCache.Add(cacheKey, gainDb);
+                }
+                phone.LoudnessGainDb = gainDb;
             }
 
             double stretch = HiFiUtauMath.StretchFactor(phone.Velocity);
@@ -445,14 +470,6 @@ namespace OpenUtau.Core.HiFiUtau {
         static void ApplyPerPhoneControls(HiFiUtauPhone phone) {
             if (phone.Mel == null || phone.Mel.GetLength(1) == 0) {
                 return;
-            }
-            var normalize = phone.Normalize / 100.0;
-            if (normalize > 0) {
-                double rms = HiFiUtauMath.MelRms(phone.Mel);
-                if (rms > 1e-12) {
-                    double target = rms * (1 - normalize) + 0.5 * normalize;
-                    HiFiUtauMath.AddLogGain(phone.Mel, Math.Log(target / rms));
-                }
             }
             if (phone.Gender != null && phone.Gender.Any(value => Math.Abs(value) > 0.001f)) {
                 HiFiUtauMath.WarpMelFrequency(phone.Mel, phone.Gender.Select(value => -value / 100f).ToArray());
