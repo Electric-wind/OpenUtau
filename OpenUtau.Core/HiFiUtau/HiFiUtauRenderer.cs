@@ -164,7 +164,7 @@ namespace OpenUtau.Core.HiFiUtau {
         static ulong ComputeRawHash(RenderPhrase phrase) {
             using var stream = new MemoryStream();
             using (var writer = new BinaryWriter(stream)) {
-                writer.Write("hifiutau-v12-wave-envelope-release");
+                writer.Write("hifiutau-v15-fixed-region-prefix");
                 writer.Write(phrase.preEffectHash);
                 WriteCurve(writer, phrase.pitches);
                 WriteCurve(writer, phrase.gender);
@@ -409,7 +409,9 @@ namespace OpenUtau.Core.HiFiUtau {
             double totalBudgetMs = phone.Envelope[4].X + phone.PreutterMs * stretch;
             int totalFrames = Math.Max(1, (int)(totalBudgetMs / config.MsPerFeatureFrame));
             int targetConFrames = Math.Max(1, (int)(conFramesOrig * stretch));
-            targetConFrames = Math.Min(targetConFrames, Math.Max(1, totalFrames - 1));
+            // A fixed region may occupy the complete destination. Keep it
+            // monotonic instead of reserving a fake one-frame vowel tail.
+            targetConFrames = Math.Min(targetConFrames, totalFrames);
 
             var melOut = phone.StretchMode == (int)StretchMode.Loop
                 ? HiFiUtauMath.ResamplePhoneMelLoop(
