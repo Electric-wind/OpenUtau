@@ -142,10 +142,18 @@ namespace OpenUtau.Core.HiFiUtau {
                                 var pitchHzCurve = AudioPostProcessingDsp.PitchHzCurve(phrase, result.samples.Length);
                                 AudioPostProcessor.ApplyGrowl(result.samples, postCurves.Growl, AudioPostProcessingDsp.SampleRate, pitchHzCurve);
                             }
+                            double samplesPerModelFrame =
+                                model.Config.ModelHop * (double)HiFiUtauConfig.OutputSampleRate / model.Config.SampleRate;
+                            HiFiUtauLoudnessNormalizer.NormalizePhonesInPlace(
+                                result.samples,
+                                phones,
+                                HiFiUtauConfig.OutputSampleRate,
+                                samplesPerModelFrame);
+                            // Keep VOL outside loudness normalization so its percentage remains a linear output ratio.
                             ApplyPhoneVolumes(
                                 result.samples,
                                 phones,
-                                model.Config.ModelHop * (double)HiFiUtauConfig.OutputSampleRate / model.Config.SampleRate);
+                                samplesPerModelFrame);
                             // Classic direct audio bypasses the resampler/model post-processing and VOL stage.
                             // Its envelope already contains VOL, so insert it immediately before Dynamics.
                             ApplyDirectPhones(result.samples, phones, phrase, HiFiUtauConfig.OutputSampleRate);
@@ -164,7 +172,7 @@ namespace OpenUtau.Core.HiFiUtau {
         static ulong ComputeRawHash(RenderPhrase phrase) {
             using var stream = new MemoryStream();
             using (var writer = new BinaryWriter(stream)) {
-                writer.Write("hifiutau-v16-phone-mel-loudness");
+                writer.Write("hifiutau-v17-phone-wave-loudness");
                 writer.Write(phrase.preEffectHash);
                 WriteCurve(writer, phrase.pitches);
                 WriteCurve(writer, phrase.gender);
@@ -351,18 +359,12 @@ namespace OpenUtau.Core.HiFiUtau {
             HiFiUtauModel model,
             CancellationToken cancellation) {
             var melExtractor = new HiFiUtauMelExtractor(model.Config);
-            var loudnessGainCache = new Dictionary<
-                (string AudioPath, int StartSample, int EndSample, double Strength), double>();
             foreach (var phone in phones) {
                 if (cancellation.IsCancellationRequested) {
                     return Array.Empty<float>();
                 }
-                phone.Mel = ExtractFeatureMel(
-                    phone, model.Config, melExtractor, loudnessGainCache);
+                phone.Mel = ExtractFeatureMel(phone, model.Config, melExtractor);
                 phone.Gender = SamplePhoneGender(phrase, phone, model.Config);
-            }
-            HiFiUtauMelLoudnessNormalizer.ApplyPhoneMelGains(phones);
-            foreach (var phone in phones) {
                 ApplyPerPhoneControls(phone);
             }
             MatchPhtp(phones, model.Config.MsPerFeatureFrame);
@@ -374,11 +376,7 @@ namespace OpenUtau.Core.HiFiUtau {
             return model.Synthesize(feat, f0);
         }
 
-        float[,] ExtractFeatureMel(
-            HiFiUtauPhone phone,
-            HiFiUtauConfig config,
-            HiFiUtauMelExtractor melExtractor,
-            Dictionary<(string AudioPath, int StartSample, int EndSample, double Strength), double> loudnessGainCache) {
+        float[,] ExtractFeatureMel(HiFiUtauPhone phone, HiFiUtauConfig config, HiFiUtauMelExtractor melExtractor) {
             var audio = HiFiUtauMath.ReadMonoSamples(phone.AudioPath, config.SampleRate);
             double totalLenMs = audio.Length * 1000.0 / config.SampleRate;
             int startSample = HiFiUtauMath.ClampSample(phone.OffsetMs, config.SampleRate, audio.Length);
@@ -388,21 +386,6 @@ namespace OpenUtau.Core.HiFiUtau {
                 : HiFiUtauMath.ClampSample(phone.OffsetMs + Math.Abs(phone.CutoffMs), config.SampleRate, audio.Length);
             if (endSample < consonantSample) {
                 endSample = consonantSample;
-            }
-
-            phone.LoudnessGainDb = 0;
-            if (!phone.Direct && phone.Normalize > 0 && endSample > startSample) {
-                var cacheKey = (phone.AudioPath, startSample, endSample, phone.Normalize);
-                if (!loudnessGainCache.TryGetValue(cacheKey, out double gainDb)) {
-                    gainDb = HiFiUtauMelLoudnessNormalizer.CalculateGainDb(
-                        audio,
-                        startSample,
-                        endSample - startSample,
-                        config.SampleRate,
-                        phone.Normalize);
-                    loudnessGainCache.Add(cacheKey, gainDb);
-                }
-                phone.LoudnessGainDb = gainDb;
             }
 
             double stretch = HiFiUtauMath.StretchFactor(phone.Velocity);

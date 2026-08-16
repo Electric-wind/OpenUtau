@@ -23,7 +23,6 @@ namespace OpenUtau.Core.HiFiUtau {
         public bool Direct;
         public int ToneShift;
         public double Normalize;
-        public double LoudnessGainDb;
         public int PhonemeType;
         public int StretchMode; // 0=None, 1=Loop, see StretchMode enum
         public double PositionMs;
