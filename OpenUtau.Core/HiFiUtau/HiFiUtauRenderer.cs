@@ -260,8 +260,8 @@ namespace OpenUtau.Core.HiFiUtau {
                 ApplyPerPhoneControls(phone);
             }
             MatchPhtp(phones, model.Config.MsPerFeatureFrame);
-            foreach (var phone in phones) {
-                ApplyPhoneEnvelope(phone);
+            for (int i = 0; i < phones.Length; i++) {
+                ApplyPhoneEnvelope(phones, i);
             }
             var f0 = SampleF0(phrase, model.Config.ModelHop, model.Config.SampleRate);
             var feat = model.ProcessFeatureSplice(phones);
@@ -425,13 +425,20 @@ namespace OpenUtau.Core.HiFiUtau {
             }
         }
 
-        static void ApplyPhoneEnvelope(HiFiUtauPhone phone) {
+        static void ApplyPhoneEnvelope(HiFiUtauPhone[] phones, int index) {
+            var phone = phones[index];
             if (phone.Mel == null || phone.Mel.GetLength(1) == 0) {
                 return;
             }
-            // Apply the crossfade envelope after phtp. VOL is applied to the waveform later.
+            // Apply the envelope after phtp. CrossFadeFeat supplies outer ramps
+            // for overlaps; explicit mel ramps protect internal zero-overlap edges.
             if (phone.Envelope != null && phone.Envelope.Length >= 5) {
-                HiFiUtauMath.ApplyEnvelopeToMel(phone.Mel, phone.Envelope);
+                bool applyFadeIn = index > 0 &&
+                    phones[index - 1].ModelEndFrame <= phone.ModelStartFrame;
+                bool applyFadeOut = index + 1 < phones.Length &&
+                    phone.ModelEndFrame <= phones[index + 1].ModelStartFrame;
+                HiFiUtauMath.ApplyEnvelopeToMel(
+                    phone.Mel, phone.Envelope, applyFadeIn, applyFadeOut);
             }
         }
 
