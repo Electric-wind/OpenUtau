@@ -386,7 +386,7 @@ namespace OpenUtau.Core.HiFiUtau {
         /// </summary>
         public static float[,] ResamplePhoneMelLoop(float[,] mel, int totalFrames, int conFramesOrig, int targetConFrames, int vowFramesOrig, double stretch) {
             totalFrames = Math.Max(1, totalFrames);
-            targetConFrames = Math.Clamp(targetConFrames, 0, totalFrames - 1);
+            targetConFrames = Math.Clamp(targetConFrames, 0, totalFrames);
             int bins = mel.GetLength(0);
             if (bins == 0 || mel.GetLength(1) == 0) {
                 return new float[bins, totalFrames];
@@ -408,14 +408,23 @@ namespace OpenUtau.Core.HiFiUtau {
         }
 
         public static float[,] ResamplePhoneMel(float[,] mel, int totalFrames, int conFramesOrig, int targetConFrames, int vowFramesOrig, double stretch) {
+            totalFrames = Math.Max(1, totalFrames);
             int bins = mel.GetLength(0);
             int frames = mel.GetLength(1);
             var result = new float[bins, totalFrames];
-            int targetVowFrames = Math.Max(1, totalFrames - targetConFrames);
+            targetConFrames = Math.Clamp(targetConFrames, 0, totalFrames);
+            int targetVowFrames = totalFrames - targetConFrames;
             for (int t = 0; t < totalFrames; t++) {
-                double src = t < targetConFrames
-                    ? t / stretch
-                    : conFramesOrig + (t - targetConFrames) * (vowFramesOrig / (double)targetVowFrames);
+                double src;
+                if (t < targetConFrames) {
+                    src = t / stretch;
+                } else if (targetVowFrames > 0) {
+                    src = conFramesOrig + (t - targetConFrames) * (vowFramesOrig / (double)targetVowFrames);
+                } else {
+                    // No vowel frames remain. Do not force a jump to the source
+                    // tail; the fixed-region prefix above is the complete output.
+                    src = t / stretch;
+                }
                 src = Math.Clamp(src, 0, frames - 1);
                 int i0 = (int)Math.Floor(src);
                 int i1 = Math.Min(frames - 1, i0 + 1);
