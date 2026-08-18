@@ -426,6 +426,9 @@ namespace OpenUtau.Core.Render {
                 if (!isSupported) {
                     continue;
                 }
+                if (curve == null && descriptor.skipOutputIfDefault && descriptor.defaultValue == 0) {
+                    continue;
+                }
                 if (curve == null) {
                     curve = new UCurve(descriptor);
                 }

@@ -258,6 +258,9 @@ namespace OpenUtau.Core.Ustx {
                 } else if (descriptor.type == UExpressionType.Options) {
                     if (descriptor.isFlag) {
                         int value = (int)GetExpression(project, track, descriptor.abbr).Item1;
+                        if (descriptor.skipOutputIfDefault && value == (int)descriptor.defaultValue) {
+                            continue;
+                        }
                         flags.Add(Tuple.Create<string, int?, string>(descriptor.options[value], null, descriptor.abbr));
                     }
                 }
