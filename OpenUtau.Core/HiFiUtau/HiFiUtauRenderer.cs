@@ -142,10 +142,17 @@ namespace OpenUtau.Core.HiFiUtau {
                                 var pitchHzCurve = AudioPostProcessingDsp.PitchHzCurve(phrase, result.samples.Length);
                                 AudioPostProcessor.ApplyGrowl(result.samples, postCurves.Growl, AudioPostProcessingDsp.SampleRate, pitchHzCurve);
                             }
+                            double samplesPerModelFrame =
+                                model.Config.ModelHop * (double)HiFiUtauConfig.OutputSampleRate / model.Config.SampleRate;
+                            HiFiUtauLoudnessNormalizer.NormalizePhonesInPlace(
+                                result.samples,
+                                phones,
+                                HiFiUtauConfig.OutputSampleRate,
+                                samplesPerModelFrame);
                             ApplyPhoneVolumes(
                                 result.samples,
                                 phones,
-                                model.Config.ModelHop * (double)HiFiUtauConfig.OutputSampleRate / model.Config.SampleRate);
+                                samplesPerModelFrame);
                             // Classic direct audio bypasses the resampler/model post-processing and VOL stage.
                             // Its envelope already contains VOL, so insert it immediately before Dynamics.
                             ApplyDirectPhones(result.samples, phones, phrase, HiFiUtauConfig.OutputSampleRate);
@@ -164,7 +171,7 @@ namespace OpenUtau.Core.HiFiUtau {
         static ulong ComputeRawHash(RenderPhrase phrase) {
             using var stream = new MemoryStream();
             using (var writer = new BinaryWriter(stream)) {
-                writer.Write("hifiutau-v15-fixed-region-prefix");
+                writer.Write("hifiutau-v16-phone-loudness-envelope");
                 writer.Write(phrase.preEffectHash);
                 WriteCurve(writer, phrase.pitches);
                 WriteCurve(writer, phrase.gender);
