@@ -60,7 +60,7 @@ namespace OpenUtau.Core.Ustx {
         /// <summary>
         /// For Options
         /// </summary>
-        public UExpressionDescriptor(string name, string abbr, bool isFlag, string[] options) {
+        public UExpressionDescriptor(string name, string abbr, bool isFlag, string[] options, bool skipOutputIfDefault = false) {
             this.name = name;
             this.abbr = abbr.ToLower();
             type = UExpressionType.Options;
@@ -68,6 +68,7 @@ namespace OpenUtau.Core.Ustx {
             max = options.Length - 1;
             this.isFlag = isFlag;
             this.options = options;
+            this.skipOutputIfDefault = skipOutputIfDefault;
         }
 
         public UExpression Create() {
