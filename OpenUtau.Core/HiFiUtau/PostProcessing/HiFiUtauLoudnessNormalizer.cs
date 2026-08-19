@@ -51,32 +51,39 @@ namespace OpenUtau.Core.HiFiUtau {
                 return;
             }
 
-            int ToSample(int frame) => Math.Clamp(
-                (int)Math.Round(frame * samplesPerModelFrame, MidpointRounding.AwayFromZero),
-                0,
-                samples.Length);
-
             var segments = new List<GainSegment>();
             foreach (var phone in phones) {
-                int start = ToSample(phone.ModelStartFrame);
-                int end = ToSample(phone.ModelEndFrame);
-                if (end <= start) {
+                var segment = CreateGainSegment(
+                    phone, 1f, sampleRate, samplesPerModelFrame, samples.Length);
+                if (segment.End <= segment.Start) {
                     continue;
                 }
 
-                var phoneSamples = new float[end - start];
-                Array.Copy(samples, start, phoneSamples, 0, phoneSamples.Length);
+                int measurementStart = segment.FadeInEnd;
+                int measurementEnd = segment.FadeOutStart;
+                if (measurementEnd <= measurementStart) {
+                    measurementStart = segment.Start;
+                    measurementEnd = segment.End;
+                }
                 double gainDb = CalculateGainDb(
-                    phoneSamples,
+                    samples,
+                    measurementStart,
+                    measurementEnd - measurementStart,
                     sampleRate,
                     phone.Normalize,
                     targetLufs,
                     peakLimitDb,
                     trimSilence: true);
+
+                double peak = Peak(samples, segment.Start, segment.End - segment.Start);
+                if (peak > 1e-12) {
+                    double peakGainDb = peakLimitDb - 20.0 * Math.Log10(peak);
+                    gainDb = Math.Min(gainDb, peakGainDb);
+                }
                 float gain = double.IsFinite(gainDb)
                     ? (float)Math.Pow(10.0, gainDb / 20.0)
                     : 1f;
-                segments.Add(new GainSegment(start, end, gain));
+                segments.Add(segment.WithGain(gain));
             }
             if (segments.Count == 0) {
                 return;
@@ -139,16 +146,21 @@ namespace OpenUtau.Core.HiFiUtau {
             return LoudnessFromMeanSquare(Mean(meanSquares, relativeGated));
         }
 
-        static float[] PrepareMeasurement(float[] samples, int sampleRate, bool trimSilence) {
-            int start = 0;
-            int end = samples.Length;
-            if (trimSilence && TryFindActiveRange(samples, sampleRate, out int activeStart, out int activeEnd)) {
+        static float[] PrepareMeasurement(
+            float[] samples,
+            int start,
+            int length,
+            int sampleRate,
+            bool trimSilence) {
+            int end = start + length;
+            if (trimSilence && TryFindActiveRange(
+                samples, start, length, sampleRate, out int activeStart, out int activeEnd)) {
                 start = activeStart;
                 end = activeEnd;
             }
-            int length = Math.Max(1, end - start);
+            length = Math.Max(1, end - start);
             var segment = new float[length];
-            Array.Copy(samples, start, segment, 0, Math.Min(length, samples.Length - start));
+            Array.Copy(samples, start, segment, 0, length);
             return PadToBlock(segment, sampleRate);
         }
 
@@ -159,14 +171,36 @@ namespace OpenUtau.Core.HiFiUtau {
             double targetLufs,
             double peakLimitDb,
             bool trimSilence) {
+            return CalculateGainDb(
+                samples, 0, samples?.Length ?? 0, sampleRate,
+                strength, targetLufs, peakLimitDb, trimSilence);
+        }
+
+        static double CalculateGainDb(
+            float[] samples,
+            int start,
+            int length,
+            int sampleRate,
+            double strength,
+            double targetLufs,
+            double peakLimitDb,
+            bool trimSilence) {
+            if (samples == null || samples.Length == 0 || sampleRate <= 0 || length <= 0) {
+                return 0;
+            }
+            start = Math.Clamp(start, 0, samples.Length);
+            length = Math.Clamp(length, 0, samples.Length - start);
+            if (length == 0) {
+                return 0;
+            }
             strength = Math.Clamp(strength, 0, 100);
-            var measurement = PrepareMeasurement(samples, sampleRate, trimSilence);
+            var measurement = PrepareMeasurement(samples, start, length, sampleRate, trimSilence);
             double inputLufs = MeasureIntegratedLoudness(measurement, sampleRate);
             double gainDb = double.IsFinite(inputLufs)
                 ? (targetLufs - inputLufs) * strength / 100.0
                 : 0.0;
 
-            double peak = Peak(samples);
+            double peak = Peak(samples, start, length);
             if (peak > 1e-12) {
                 double peakGainDb = peakLimitDb - 20.0 * Math.Log10(peak);
                 gainDb = Math.Min(gainDb, peakGainDb);
@@ -175,54 +209,80 @@ namespace OpenUtau.Core.HiFiUtau {
         }
 
         static void ApplySegmentGains(float[] samples, List<GainSegment> segments) {
-            var gains = new float[samples.Length];
-            float previousGain = segments[0].Gain;
-            Array.Fill(gains, previousGain);
-            int previousEnd = segments[0].End;
-
-            for (int i = 1; i < segments.Count; i++) {
-                var segment = segments[i];
-                if (segment.Start < previousEnd) {
-                    int overlapEnd = Math.Min(previousEnd, segment.End);
-                    int overlapSamples = overlapEnd - segment.Start;
-                    float overlapStartGain = gains[segment.Start];
-                    for (int j = segment.Start; j < overlapEnd; j++) {
-                        float alpha = overlapSamples == 1
-                            ? 1f
-                            : (j - segment.Start) / (float)(overlapSamples - 1);
-                        gains[j] = overlapStartGain + (segment.Gain - overlapStartGain) * alpha;
-                    }
-                    Array.Fill(gains, segment.Gain, overlapEnd, segment.End - overlapEnd);
-                } else {
-                    Array.Fill(gains, previousGain, previousEnd, segment.Start - previousEnd);
-                    Array.Fill(gains, segment.Gain, segment.Start, segment.End - segment.Start);
-                }
-
-                if (segment.End >= previousEnd) {
-                    previousEnd = segment.End;
-                    previousGain = segment.Gain;
+            if (segments.Count == 0) {
+                return;
+            }
+            // Fade only the correction around unity; the synthesized waveform already contains the audio envelope.
+            var correctionSums = new float[samples.Length];
+            var weightSums = new float[samples.Length];
+            foreach (var segment in segments) {
+                for (int sample = segment.Start; sample < segment.End; sample++) {
+                    float weight = segment.WeightAt(sample);
+                    correctionSums[sample] += weight * (segment.Gain - 1f);
+                    weightSums[sample] += weight;
                 }
             }
 
-            Array.Fill(gains, previousGain, previousEnd, samples.Length - previousEnd);
             for (int i = 0; i < samples.Length; i++) {
-                samples[i] *= gains[i];
+                float gain = 1f + correctionSums[i] / Math.Max(1f, weightSums[i]);
+                samples[i] *= Math.Max(0f, gain);
             }
         }
 
-        static bool TryFindActiveRange(float[] samples, int sampleRate, out int start, out int end) {
-            start = 0;
-            end = samples.Length;
+        static GainSegment CreateGainSegment(
+            HiFiUtauPhone phone,
+            float gain,
+            int sampleRate,
+            double samplesPerModelFrame,
+            int sampleCount) {
+            int ToSample(int frame) => Math.Clamp(
+                (int)Math.Round(frame * samplesPerModelFrame, MidpointRounding.AwayFromZero),
+                0,
+                sampleCount);
+
+            int start = ToSample(phone.ModelStartFrame);
+            int end = ToSample(phone.ModelEndFrame);
+            int fadeInSamples = 0;
+            int fadeOutSamples = 0;
+            if (phone.Envelope != null && phone.Envelope.Length >= 5) {
+                double fadeInMs = phone.Envelope[1].X - phone.Envelope[0].X;
+                double fadeOutMs = phone.Envelope[4].X - phone.Envelope[3].X;
+                if (double.IsFinite(fadeInMs) && fadeInMs > 0) {
+                    fadeInSamples = (int)Math.Round(
+                        fadeInMs * sampleRate / 1000.0,
+                        MidpointRounding.AwayFromZero);
+                }
+                if (double.IsFinite(fadeOutMs) && fadeOutMs > 0) {
+                    fadeOutSamples = (int)Math.Round(
+                        fadeOutMs * sampleRate / 1000.0,
+                        MidpointRounding.AwayFromZero);
+                }
+            }
+            int fadeInEnd = Math.Clamp(start + fadeInSamples, start, end);
+            int fadeOutStart = Math.Clamp(end - fadeOutSamples, fadeInEnd, end);
+            gain = float.IsFinite(gain) ? Math.Max(0f, gain) : 1f;
+            return new GainSegment(start, fadeInEnd, fadeOutStart, end, gain);
+        }
+
+        static bool TryFindActiveRange(
+            float[] samples,
+            int rangeStart,
+            int rangeLength,
+            int sampleRate,
+            out int start,
+            out int end) {
+            start = rangeStart;
+            end = rangeStart + rangeLength;
             int frameSamples = Math.Max(1, (int)(sampleRate * 0.020));
             int hopSamples = Math.Max(1, (int)(sampleRate * 0.010));
-            if (samples.Length < frameSamples) {
-                return Peak(samples) > Math.Pow(10.0, SilenceThresholdDb / 20.0);
+            if (rangeLength < frameSamples) {
+                return Peak(samples, rangeStart, rangeLength) > Math.Pow(10.0, SilenceThresholdDb / 20.0);
             }
 
-            int firstFrame = -1;
-            int lastFrame = -1;
-            int frameIndex = 0;
-            for (int offset = 0; offset + frameSamples <= samples.Length; offset += hopSamples, frameIndex++) {
+            int rangeEnd = rangeStart + rangeLength;
+            int firstOffset = -1;
+            int lastOffset = -1;
+            for (int offset = rangeStart; offset + frameSamples <= rangeEnd; offset += hopSamples) {
                 double sum = 0;
                 for (int i = offset; i < offset + frameSamples; i++) {
                     sum += samples[i] * samples[i];
@@ -230,18 +290,18 @@ namespace OpenUtau.Core.HiFiUtau {
                 double rms = Math.Sqrt(sum / frameSamples);
                 double rmsDb = rms > 1e-10 ? 20.0 * Math.Log10(rms) : double.NegativeInfinity;
                 if (rmsDb > SilenceThresholdDb) {
-                    firstFrame = firstFrame < 0 ? frameIndex : firstFrame;
-                    lastFrame = frameIndex;
+                    firstOffset = firstOffset < 0 ? offset : firstOffset;
+                    lastOffset = offset;
                 }
             }
-            if (firstFrame < 0) {
+            if (firstOffset < 0) {
                 return false;
             }
 
             int tailPaddingFrames = (int)(sampleRate * 0.100) / hopSamples;
-            start = Math.Max(0, firstFrame * hopSamples);
-            end = Math.Min(samples.Length,
-                (lastFrame + 1 + tailPaddingFrames) * hopSamples + frameSamples);
+            start = firstOffset;
+            end = Math.Min(rangeEnd,
+                lastOffset + (1 + tailPaddingFrames) * hopSamples + frameSamples);
             return end > start;
         }
 
@@ -259,9 +319,10 @@ namespace OpenUtau.Core.HiFiUtau {
             return padded;
         }
 
-        static double Peak(float[] samples) {
+        static double Peak(float[] samples, int start, int length) {
             double peak = 0;
-            for (int i = 0; i < samples.Length; i++) {
+            int end = start + length;
+            for (int i = start; i < end; i++) {
                 peak = Math.Max(peak, Math.Abs(samples[i]));
             }
             return peak;
@@ -283,13 +344,34 @@ namespace OpenUtau.Core.HiFiUtau {
 
         readonly struct GainSegment {
             public readonly int Start;
+            public readonly int FadeInEnd;
+            public readonly int FadeOutStart;
             public readonly int End;
             public readonly float Gain;
 
-            public GainSegment(int start, int end, float gain) {
+            public GainSegment(int start, int fadeInEnd, int fadeOutStart, int end, float gain) {
                 Start = start;
+                FadeInEnd = fadeInEnd;
+                FadeOutStart = fadeOutStart;
                 End = end;
                 Gain = gain;
+            }
+
+            public GainSegment WithGain(float gain) {
+                return new GainSegment(Start, FadeInEnd, FadeOutStart, End, gain);
+            }
+
+            public float WeightAt(int sample) {
+                if (sample < Start || sample >= End) {
+                    return 0f;
+                }
+                float fadeInWeight = FadeInEnd > Start && sample < FadeInEnd
+                    ? (sample - Start) / (float)(FadeInEnd - Start)
+                    : 1f;
+                float fadeOutWeight = End > FadeOutStart && sample >= FadeOutStart
+                    ? (End - sample) / (float)(End - FadeOutStart)
+                    : 1f;
+                return Math.Min(fadeInWeight, fadeOutWeight);
             }
         }
 
