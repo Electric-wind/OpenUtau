@@ -516,8 +516,8 @@ namespace OpenUtau.Core.HiFiUtau {
 
         public UExpressionDescriptor[] GetSuggestedExpressions(USinger singer, URenderSettings renderSettings) {
             return new[] {
-                new UExpressionDescriptor("phoneme type", "phtp", true, new[] { "normal", "follow next", "follow previous" }),
-                new UExpressionDescriptor("stretch mode", "stm", true, new[] { "none", "loop" }),
+                new UExpressionDescriptor("phoneme type", "phtp", true, new[] { "normal", "follow next", "follow previous" }, skipOutputIfDefault: true),
+                new UExpressionDescriptor("stretch mode", "stm", true, new[] { "none", "loop" }, skipOutputIfDefault: true),
                 new UExpressionDescriptor("modulation plus", Format.Ustx.MODP, 0, 100, 0),
                 new UExpressionDescriptor {
                     name = "breath low (curve)",
@@ -527,6 +527,7 @@ namespace OpenUtau.Core.HiFiUtau {
                     max = 100,
                     defaultValue = 0,
                     isFlag = false,
+                    skipOutputIfDefault = true,
                 },
                 new UExpressionDescriptor {
                     name = "breath high (curve)",
@@ -536,6 +537,7 @@ namespace OpenUtau.Core.HiFiUtau {
                     max = 100,
                     defaultValue = 0,
                     isFlag = false,
+                    skipOutputIfDefault = true,
                 },
                 new UExpressionDescriptor {
                     name = "brightness (curve)",
@@ -545,6 +547,7 @@ namespace OpenUtau.Core.HiFiUtau {
                     max = 100,
                     defaultValue = 0,
                     isFlag = false,
+                    skipOutputIfDefault = true,
                 },
                 new UExpressionDescriptor {
                     name = "growl (curve)",
@@ -554,6 +557,7 @@ namespace OpenUtau.Core.HiFiUtau {
                     max = 100,
                     defaultValue = 0,
                     isFlag = false,
+                    skipOutputIfDefault = true,
                 },
             };
         }
