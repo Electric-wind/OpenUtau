@@ -171,7 +171,7 @@ namespace OpenUtau.Core.HiFiUtau {
         static ulong ComputeRawHash(RenderPhrase phrase) {
             using var stream = new MemoryStream();
             using (var writer = new BinaryWriter(stream)) {
-                writer.Write("hifiutau-v16-phone-loudness-envelope");
+                writer.Write("hifiutau-v17-waveform-phone-loudness");
                 writer.Write(phrase.preEffectHash);
                 WriteCurve(writer, phrase.pitches);
                 WriteCurve(writer, phrase.gender);
@@ -452,14 +452,6 @@ namespace OpenUtau.Core.HiFiUtau {
         static void ApplyPerPhoneControls(HiFiUtauPhone phone) {
             if (phone.Mel == null || phone.Mel.GetLength(1) == 0) {
                 return;
-            }
-            var normalize = phone.Normalize / 100.0;
-            if (normalize > 0) {
-                double rms = HiFiUtauMath.MelRms(phone.Mel);
-                if (rms > 1e-12) {
-                    double target = rms * (1 - normalize) + 0.5 * normalize;
-                    HiFiUtauMath.AddLogGain(phone.Mel, Math.Log(target / rms));
-                }
             }
             if (phone.Gender != null && phone.Gender.Any(value => Math.Abs(value) > 0.001f)) {
                 HiFiUtauMath.WarpMelFrequency(phone.Mel, phone.Gender.Select(value => -value / 100f).ToArray());
