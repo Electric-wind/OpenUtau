@@ -45,7 +45,7 @@ namespace OpenUtau.Core.HiFiUtau {
                 Velocity = phone.velocity * 100.0,
                 Volume = phone.volume,
                 ToneShift = phone.toneShift,
-                Normalize = GetFlag(phone, "P", 0),
+                Normalize = GetFlag(phone, "P", 86),
                 PhonemeType = ParsePhtpFlag(phone),
                 StretchMode = ParseStmFlag(phone),
                 Envelope = phone.envelope,

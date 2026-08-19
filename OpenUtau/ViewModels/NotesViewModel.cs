@@ -171,6 +171,7 @@ namespace OpenUtau.App.ViewModels {
                             ExpShadowOpacity = 0;
                         } else {
                             ExpTrackHeight = 0;
+                            ExpShadowOpacity = 0.3;
                         }
                         ShowCurveToolbar = descriptor.type == UExpressionType.Curve;
                     } else {

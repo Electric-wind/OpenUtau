@@ -144,6 +144,11 @@ namespace OpenUtau.Core.HiFiUtau {
                                 phones,
                                 HiFiUtauConfig.OutputSampleRate,
                                 samplesPerModelFrame);
+                            // Apply VOL on the waveform so its percentage remains a linear output ratio.
+                            ApplyPhoneVolumes(
+                                result.samples,
+                                phones,
+                                model.Config.ModelHop * (double)HiFiUtauConfig.OutputSampleRate / model.Config.SampleRate);
                             Renderers.ApplyDynamics(phrase, result);
                             WriteCacheWave(finalWavPath, result.samples);
                         }
@@ -159,7 +164,7 @@ namespace OpenUtau.Core.HiFiUtau {
         static ulong ComputeRawHash(RenderPhrase phrase) {
             using var stream = new MemoryStream();
             using (var writer = new BinaryWriter(stream)) {
-                writer.Write("hifiutau-v18");
+                writer.Write("hifiutau-v7-fixed-region-prefix-loudness-v1");
                 writer.Write(phrase.preEffectHash);
                 WriteCurve(writer, phrase.pitches);
                 WriteCurve(writer, phrase.gender);
@@ -262,8 +267,8 @@ namespace OpenUtau.Core.HiFiUtau {
                 ApplyPerPhoneControls(phone);
             }
             MatchPhtp(phones, model.Config.MsPerFeatureFrame);
-            foreach (var phone in phones) {
-                ApplyPhoneEnvelope(phone);
+            for (int i = 0; i < phones.Length; i++) {
+                ApplyPhoneEnvelope(phones, i);
             }
             var f0 = SampleF0(phrase, model.Config.ModelHop, model.Config.SampleRate);
             var feat = model.ProcessFeatureSplice(phones);
@@ -311,8 +316,9 @@ namespace OpenUtau.Core.HiFiUtau {
             double totalBudgetMs = phone.Envelope[4].X + phone.PreutterMs * stretch;
             int totalFrames = Math.Max(1, (int)(totalBudgetMs / config.MsPerFeatureFrame));
             int targetConFrames = Math.Max(1, (int)(conFramesOrig * stretch));
-            targetConFrames = Math.Min(targetConFrames, Math.Max(1, totalFrames - 1));
-
+            // A fixed region may occupy the complete destination. Keep it
+            // monotonic instead of reserving a fake one-frame vowel tail.
+            targetConFrames = Math.Min(targetConFrames, totalFrames);
             var melOut = phone.StretchMode == (int)StretchMode.Loop
                 ? HiFiUtauMath.ResamplePhoneMelLoop(
                     melFull, totalFrames, conFramesOrig, targetConFrames, vowFramesOrig, stretch)
@@ -356,13 +362,82 @@ namespace OpenUtau.Core.HiFiUtau {
             }
         }
 
-        static void ApplyPhoneEnvelope(HiFiUtauPhone phone) {
+        internal static void ApplyPhoneVolumes(
+            float[] samples,
+            HiFiUtauPhone[] phones,
+            double samplesPerModelFrame) {
+            if (samples == null || samples.Length == 0 ||
+                phones == null || phones.Length == 0 ||
+                !double.IsFinite(samplesPerModelFrame) || samplesPerModelFrame <= 0) {
+                return;
+            }
+
+            static float GetGain(HiFiUtauPhone phone) {
+                return double.IsFinite(phone.Volume)
+                    ? (float)Math.Max(0, phone.Volume)
+                    : 1f;
+            }
+
+            int ToSample(int frame) => Math.Clamp(
+                (int)Math.Round(frame * samplesPerModelFrame, MidpointRounding.AwayFromZero),
+                0,
+                samples.Length);
+
+            var gains = new float[samples.Length];
+            float previousGain = GetGain(phones[0]);
+            Array.Fill(gains, previousGain);
+            int previousEnd = ToSample(phones[0].ModelEndFrame);
+
+            for (int i = 1; i < phones.Length; i++) {
+                int start = ToSample(phones[i].ModelStartFrame);
+                int end = ToSample(phones[i].ModelEndFrame);
+                if (end <= start) {
+                    continue;
+                }
+
+                float gain = GetGain(phones[i]);
+                if (start < previousEnd) {
+                    int overlapEnd = Math.Min(previousEnd, end);
+                    int overlapSamples = overlapEnd - start;
+                    float overlapStartGain = gains[start];
+                    for (int j = start; j < overlapEnd; j++) {
+                        float alpha = overlapSamples == 1
+                            ? 1f
+                            : (j - start) / (float)(overlapSamples - 1);
+                        gains[j] = overlapStartGain + (gain - overlapStartGain) * alpha;
+                    }
+                    Array.Fill(gains, gain, overlapEnd, end - overlapEnd);
+                } else {
+                    Array.Fill(gains, previousGain, previousEnd, start - previousEnd);
+                    Array.Fill(gains, gain, start, end - start);
+                }
+
+                if (end >= previousEnd) {
+                    previousEnd = end;
+                    previousGain = gain;
+                }
+            }
+
+            Array.Fill(gains, previousGain, previousEnd, samples.Length - previousEnd);
+            for (int i = 0; i < samples.Length; i++) {
+                samples[i] *= gains[i];
+            }
+        }
+
+        static void ApplyPhoneEnvelope(HiFiUtauPhone[] phones, int index) {
+            var phone = phones[index];
             if (phone.Mel == null || phone.Mel.GetLength(1) == 0) {
                 return;
             }
-            // Apply per-phone envelope amplitude after phtp (replaces Volume parameter)
+            // Apply the envelope after phtp. CrossFadeFeat supplies outer ramps
+            // for overlaps; explicit mel ramps protect internal zero-overlap edges.
             if (phone.Envelope != null && phone.Envelope.Length >= 5) {
-                HiFiUtauMath.ApplyEnvelopeToMel(phone.Mel, phone.Envelope);
+                bool applyFadeIn = index > 0 &&
+                    phones[index - 1].ModelEndFrame <= phone.ModelStartFrame;
+                bool applyFadeOut = index + 1 < phones.Length &&
+                    phone.ModelEndFrame <= phones[index + 1].ModelStartFrame;
+                HiFiUtauMath.ApplyEnvelopeToMel(
+                    phone.Mel, phone.Envelope, applyFadeIn, applyFadeOut);
             }
         }
 
@@ -440,8 +515,8 @@ namespace OpenUtau.Core.HiFiUtau {
 
         public UExpressionDescriptor[] GetSuggestedExpressions(USinger singer, URenderSettings renderSettings) {
             return new[] {
-                new UExpressionDescriptor("phoneme type", "phtp", true, new[] { "normal", "follow next", "follow previous" }),
-                new UExpressionDescriptor("stretch mode", "stm", true, new[] { "none", "loop" }),
+                new UExpressionDescriptor("phoneme type", "phtp", true, new[] { "normal", "follow next", "follow previous" }, skipOutputIfDefault: true),
+                new UExpressionDescriptor("stretch mode", "stm", true, new[] { "none", "loop" }, skipOutputIfDefault: true),
                 new UExpressionDescriptor("modulation plus", Format.Ustx.MODP, 0, 100, 0),
                 new UExpressionDescriptor {
                     name = "breath low (curve)",
@@ -451,6 +526,7 @@ namespace OpenUtau.Core.HiFiUtau {
                     max = 100,
                     defaultValue = 0,
                     isFlag = false,
+                    skipOutputIfDefault = true,
                 },
                 new UExpressionDescriptor {
                     name = "breath high (curve)",
@@ -460,6 +536,7 @@ namespace OpenUtau.Core.HiFiUtau {
                     max = 100,
                     defaultValue = 0,
                     isFlag = false,
+                    skipOutputIfDefault = true,
                 },
                 new UExpressionDescriptor {
                     name = "brightness (curve)",
@@ -469,6 +546,7 @@ namespace OpenUtau.Core.HiFiUtau {
                     max = 100,
                     defaultValue = 0,
                     isFlag = false,
+                    skipOutputIfDefault = true,
                 },
                 new UExpressionDescriptor {
                     name = "growl (curve)",
@@ -478,6 +556,7 @@ namespace OpenUtau.Core.HiFiUtau {
                     max = 100,
                     defaultValue = 0,
                     isFlag = false,
+                    skipOutputIfDefault = true,
                 },
             };
         }
