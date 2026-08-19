@@ -70,12 +70,13 @@ See the [Getting-Started Wiki page](https://github.com/stakira/OpenUtau/wiki/Get
 - Extensible real-time phonetic editing.
   - Includes phonemizers for different phonetic systems (VCV, CVVC, Arpasing, etc.) in many different languages (English, Japanese, Chinese, Korean, Russian and more).
 - Expressions replace the standard UTAU "flags" for tuning.
-  - The built-in WORLDLINE-R resampler supports curve tuning, similar to many vocal synth editors.
+  - The built-in WORLDLINE-R & HIFIUTAU resampler supports curve tuning, similar to many vocal synth editors.
 - Internationalisation, including UI translation and file system encoding support.
   - Unlike UTAU, there is no need to change your system locale to use OpenUtau.
 - Smooth preview/rendering experience.
   - Pre-rendering allows OpenUtau to render vocals before playback, saving time during editing and tuning.
 - Supports ENUNU AI singers. See the [ENUNU wiki page](https://github.com/stakira/OpenUtau/wiki/ENUNU-NNSVS-Support) for more info.
+- Supports Diffsinger AI singers. See the [Diffsinger wiki page](https://github.com/openutau/OpenUtau/wiki/DiffSinger-support) for more info.
 - Easy-to-use plugin system.
 - Versatile resampling engine interface.
   - Compatible with most UTAU resamplers.
