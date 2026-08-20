@@ -200,6 +200,12 @@ public class RmvpeTranscriber : IDisposable {
     const int SampleRate = 16000;
     const int HopLength = 160;
     const float Threshold = 0.03f;
+    const int FrqMedianRadius = 2;
+    const int FrqMaxGapFrames = 5;
+    const float MinFrqF0 = 20f;
+    const float MaxFrqF0 = 2000f;
+
+    public const string DownloadUrl = "https://github.com/yxlllc/RMVPE/releases/tag/230917";
 
     readonly InferenceSession session;
     readonly string waveformInputName;
@@ -243,6 +249,16 @@ public class RmvpeTranscriber : IDisposable {
         return ResolveModelPath();
     }
 
+    public static MessageCustomizableException ModelNotFoundException() {
+        var modelPath = GetModelPath();
+        return new MessageCustomizableException(
+            "RMVPE not found",
+            "<translate:errors.failed.frq.rmvpe>",
+            new FileNotFoundException(modelPath),
+            false,
+            new object[] { DownloadUrl, modelPath });
+    }
+
     static string ResolveModelPath() {
         var candidates = new List<string> {
             Path.Combine(PathManager.Inst.DependencyPath, "rmvpe", "rmvpe.onnx"),
@@ -270,7 +286,29 @@ public class RmvpeTranscriber : IDisposable {
             return null;
         }
         var mono = ToMono(wavePart.Samples, startSample, endSample, wavePart.channels);
-        var resampled = ResampleTo16k(mono, wavePart.sampleRate);
+        try {
+            var (f0, uv) = InferF0(mono, wavePart.sampleRate);
+            var midiPitch = ConvertToInterpolatedMidiPitch(f0, uv);
+            return new RmvpeResult {
+                TimeStepSeconds = (double)HopLength / SampleRate,
+                MidiPitch = midiPitch,
+            };
+        } catch (OperationCanceledException) {
+            return null;
+        }
+    }
+
+    public double[] InferFrqF0(float[] monoSamples, int sourceSampleRate, int outputLength, double outputStepSeconds) {
+        if (monoSamples.Length == 0 || outputLength <= 0) {
+            return Array.Empty<double>();
+        }
+        var (rawF0, uv) = InferF0(monoSamples, sourceSampleRate);
+        var stableF0 = StabilizeFrqF0(rawF0, uv);
+        return ResampleFrqF0(stableF0, outputLength, outputStepSeconds);
+    }
+
+    (float[] f0, bool[] uv) InferF0(float[] monoSamples, int sourceSampleRate) {
+        var resampled = ResampleTo16k(monoSamples, sourceSampleRate);
         var waveform = new DenseTensor<float>(new[] { 1, resampled.Length });
         for (int i = 0; i < resampled.Length; ++i) {
             waveform[0, i] = Math.Clamp(resampled[i], -1f, 1f);
@@ -288,17 +326,90 @@ public class RmvpeTranscriber : IDisposable {
             if (f0.Length != uv.Length) {
                 throw new InvalidDataException($"Unexpected RMVPE output sizes: f0={f0.Length}, uv={uv.Length}");
             }
-            var midiPitch = ConvertToInterpolatedMidiPitch(f0, uv);
-            return new RmvpeResult {
-                TimeStepSeconds = (double)HopLength / SampleRate,
-                MidiPitch = midiPitch,
-            };
+            return (f0, uv);
         } catch (OnnxRuntimeException) {
             if (runOptions != null && runOptions.Terminate) {
-                return null;
+                throw new OperationCanceledException();
             }
             throw;
         }
+    }
+
+    static float[] StabilizeFrqF0(float[] f0, bool[] uv) {
+        var stable = new float[f0.Length];
+        for (int i = 0; i < stable.Length; ++i) {
+            stable[i] = !uv[i] && float.IsFinite(f0[i]) && f0[i] >= MinFrqF0 && f0[i] <= MaxFrqF0
+                ? f0[i]
+                : 0;
+        }
+
+        int voiced = 0;
+        while (voiced < stable.Length) {
+            while (voiced < stable.Length && stable[voiced] <= 0) {
+                voiced++;
+            }
+            if (voiced >= stable.Length) {
+                break;
+            }
+            int gapStart = voiced + 1;
+            while (gapStart < stable.Length && stable[gapStart] > 0) {
+                gapStart++;
+            }
+            int nextVoiced = gapStart;
+            while (nextVoiced < stable.Length && stable[nextVoiced] <= 0) {
+                nextVoiced++;
+            }
+            int gapLength = nextVoiced - gapStart;
+            if (gapLength > 0 && gapLength <= FrqMaxGapFrames && nextVoiced < stable.Length) {
+                float left = stable[gapStart - 1];
+                float right = stable[nextVoiced];
+                for (int i = 0; i < gapLength; ++i) {
+                    float ratio = (i + 1f) / (gapLength + 1f);
+                    stable[gapStart + i] = left + (right - left) * ratio;
+                }
+            }
+            voiced = nextVoiced;
+        }
+
+        var smoothed = stable.ToArray();
+        for (int i = 0; i < stable.Length; ++i) {
+            if (stable[i] <= 0) {
+                continue;
+            }
+            var window = new List<float>();
+            for (int j = Math.Max(0, i - FrqMedianRadius); j <= Math.Min(stable.Length - 1, i + FrqMedianRadius); ++j) {
+                if (stable[j] > 0) {
+                    window.Add(stable[j]);
+                }
+            }
+            window.Sort();
+            smoothed[i] = window[window.Count / 2];
+        }
+        return smoothed;
+    }
+
+    static double[] ResampleFrqF0(float[] f0, int outputLength, double outputStepSeconds) {
+        var result = new double[outputLength];
+        if (f0.Length == 0) {
+            return result;
+        }
+        double rmvpeStepSeconds = (double)HopLength / SampleRate;
+        for (int i = 0; i < result.Length; ++i) {
+            double sourcePosition = i * outputStepSeconds / rmvpeStepSeconds;
+            int leftIndex = Math.Min((int)Math.Floor(sourcePosition), f0.Length - 1);
+            int rightIndex = Math.Min(leftIndex + 1, f0.Length - 1);
+            float left = f0[leftIndex];
+            float right = f0[rightIndex];
+            if (left > 0 && right > 0) {
+                double ratio = sourcePosition - Math.Floor(sourcePosition);
+                result[i] = left + (right - left) * ratio;
+            } else if (leftIndex == rightIndex || sourcePosition - leftIndex < 0.5) {
+                result[i] = left;
+            } else {
+                result[i] = right;
+            }
+        }
+        return result;
     }
 
     static float[] ConvertToInterpolatedMidiPitch(float[] f0, bool[] uv) {
