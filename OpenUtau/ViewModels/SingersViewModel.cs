@@ -66,21 +66,10 @@ namespace OpenUtau.App.ViewModels {
             this.WhenAnyValue(vm => vm.Singer)
                 .WhereNotNull()
                 .Subscribe(singer => {
-                    if (LoadingWindow.IsLoading()) {
-                        try {
-                            AttachSinger();
-                        } catch (Exception e) {
-                            DocManager.Inst.ExecuteCmd(new ErrorMessageNotification(e));
-                        }
-                    } else {
-                        DocManager.Inst.ExecuteCmd(new LoadingNotification(typeof(SingersDialog), true, "singer"));
-                        try {
-                            AttachSinger();
-                        } catch (Exception e) {
-                            DocManager.Inst.ExecuteCmd(new ErrorMessageNotification(e));
-                        } finally {
-                            DocManager.Inst.ExecuteCmd(new LoadingNotification(typeof(SingersDialog), false, "singer"));
-                        }
+                    try {
+                        AttachSinger();
+                    } catch (Exception e) {
+                        DocManager.Inst.ExecuteCmd(new ErrorMessageNotification(e));
                     }
                     void AttachSinger() {
                         singer.EnsureLoaded();
