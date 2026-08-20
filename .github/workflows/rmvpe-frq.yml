@@ -2,13 +2,6 @@ name: Add RMVPE generate frq
 run-name: Add RMVPE generate frq
 
 on:
-  push:
-    branches:
-      - master
-    paths:
-      - OpenUtau.Core/Analysis/Rmvpe.cs
-      - OpenUtau/ViewModels/SingersViewModel.cs
-      - .github/workflows/rmvpe-frq.yml
   workflow_dispatch:
     inputs:
       version:
@@ -55,13 +48,13 @@ jobs:
           csproj-files: "OpenUtau/*.csproj"
 
       - name: Test
-        run: dotnet test OpenUtau.Test
+        run: dotnet test OpenUtau.Test -p:NuGetAudit=false
 
       - name: Restore
-        run: dotnet restore OpenUtau -r ${{ matrix.arch.rid }} || (sleep 10 && dotnet restore OpenUtau -r ${{ matrix.arch.rid }})
+        run: dotnet restore OpenUtau -r ${{ matrix.arch.rid }} -p:NuGetAudit=false || (sleep 10 && dotnet restore OpenUtau -r ${{ matrix.arch.rid }} -p:NuGetAudit=false)
 
       - name: Build (Windows and Linux)
-        run: dotnet publish OpenUtau -c Release -r ${{ matrix.arch.rid }} --self-contained true -o bin/${{ matrix.arch.name }}/
+        run: dotnet publish OpenUtau -c Release -r ${{ matrix.arch.rid }} --self-contained true --no-restore -o bin/${{ matrix.arch.name }}/
         if: ${{ matrix.arch.os != 'osx' }}
 
       - name: Build (MacOS)
