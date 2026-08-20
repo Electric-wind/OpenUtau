@@ -13,6 +13,7 @@ using NWaves.Audio;
 using OpenUtau.App.ViewModels;
 using OpenUtau.Classic;
 using OpenUtau.Core;
+using OpenUtau.Core.Analysis;
 using OpenUtau.Core.Ustx;
 using Serilog;
 
@@ -364,6 +365,11 @@ namespace OpenUtau.App.Views {
             if (OtoGrid != null &&
                 sender is Control control &&
                 DataContext is SingersViewModel viewModel) {
+                string? method = control.Tag as string;
+                if (method == "rmvpe" && !RmvpeTranscriber.IsInstalled()) {
+                    _ = MessageBox.ShowError(this, RmvpeTranscriber.ModelNotFoundException());
+                    return;
+                }
                 string[] files = OtoGrid.SelectedItems
                     .Cast<UOto>()
                     .Select(oto => oto.File)
@@ -375,7 +381,7 @@ namespace OpenUtau.App.Views {
                     msgbox = MessageBox.ShowModal(this, text, text);
                 }
                 var scheduler = TaskScheduler.FromCurrentSynchronizationContext();
-                viewModel.RegenFrq(files, control.Tag as string, count => {
+                viewModel.RegenFrq(files, method, count => {
                     msgbox?.SetText(string.Format("{0}\n{1} / {2}", text, count, files.Length));
                 }).ContinueWith(task => {
                     msgbox?.Close();

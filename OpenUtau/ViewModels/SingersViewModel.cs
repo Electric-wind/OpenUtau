@@ -14,6 +14,7 @@ using OpenUtau.Api;
 using OpenUtau.App.Views;
 using OpenUtau.Classic;
 using OpenUtau.Core;
+using OpenUtau.Core.Analysis;
 using OpenUtau.Core.Ustx;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
@@ -481,7 +482,28 @@ namespace OpenUtau.App.ViewModels {
             return Task.Run(() => {
                 double stepMs = Frq.kHopSize * 1000.0 / 44100;
                 int count = 0;
-                if (method == "crepe") {
+                if (method == "rmvpe") {
+                    using var rmvpe = new RmvpeTranscriber();
+                    foreach (string file in files) {
+                        if (!File.Exists(file)) {
+                            throw new FileNotFoundException(string.Format("File {0} missing!", file));
+                        }
+                        string frqFile = VoicebankFiles.GetFrqFile(file);
+                        float[]? samples;
+                        using (var waveStream = Core.Format.Wave.OpenFile(file)) {
+                            samples = Core.Format.Wave.GetSamples(waveStream.ToSampleProvider().ToMono(1, 0));
+                        }
+                        if (samples != null) {
+                            int outputLength = (samples.Length + Frq.kHopSize - 1) / Frq.kHopSize;
+                            var f0 = rmvpe.InferFrqF0(samples, 44100, outputLength, stepMs / 1000.0);
+                            var frq = Frq.Build(samples, f0);
+                            using (var stream = File.OpenWrite(frqFile)) {
+                                frq.Save(stream);
+                            }
+                        }
+                        progress.Invoke(Interlocked.Increment(ref count));
+                    }
+                } else if (method == "crepe") {
                     Parallel.For(0, files.Length, new ParallelOptions {
                         MaxDegreeOfParallelism = Environment.ProcessorCount / 2
                     },

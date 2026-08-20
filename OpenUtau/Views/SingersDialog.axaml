@@ -135,6 +135,7 @@
             <MenuItem Header="DIO" Click="RegenFrq" Tag="dio"/>
             <MenuItem Header="pYIN" Click="RegenFrq" Tag="pyin"/>
             <MenuItem Header="CREPE" Click="RegenFrq" Tag="crepe"/>
+            <MenuItem Header="RMVPE" Click="RegenFrq" Tag="rmvpe"/>
           </MenuItem>
         </ContextMenu>
       </DataGrid.ContextMenu>

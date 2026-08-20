@@ -124,6 +124,7 @@
   <system:String x:Key="errors.failed.searchsinger">查找歌手失败</system:String>
   <!--<system:String x:Key="errors.failed.synth.cutoffbeforeoffset">Oto error: cutoff before offset</system:String>-->
   <!--<system:String x:Key="errors.failed.synth.cutoffexceedduration">Oto error: cutoff exceeds audio duration</system:String>-->
+  <system:String x:Key="errors.failed.frq.rmvpe">未安装 RMVPE。请从包管理器安装，或从 {0} 下载 rmvpe.onnx 并放入 {1}</system:String>
   <system:String x:Key="errors.failed.transcribe.some">加载 SOME 模型失败。请从此处下载：{0}</system:String>
   <system:String x:Key="errors.install.cpp">请安装最新的 Visual C++ 运行环境。 https://learn.microsoft.com/en-US/cpp/windows/latest-supported-vc-redist?view=msvc-170</system:String>
   <system:String x:Key="errors.lyrics.regex">正则表达式包含不支持的字符</system:String>
