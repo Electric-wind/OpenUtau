@@ -216,7 +216,7 @@ public class RmvpeTranscriber : IDisposable {
     RunOptions? runOptions;
     bool disposed;
 
-    public RmvpeTranscriber() {
+    public RmvpeTranscriber(OnnxRunnerChoice runnerChoice = OnnxRunnerChoice.CPU) {
         modelPath = ResolveModelPath();
         if (!File.Exists(modelPath)) {
             throw new MessageCustomizableException(
@@ -227,7 +227,7 @@ public class RmvpeTranscriber : IDisposable {
                 new[] { modelPath });
         }
         Log.Information("RMVPE loading model from {ModelPath}", modelPath);
-        session = Onnx.getInferenceSession(modelPath, OnnxRunnerChoice.CPU);
+        session = Onnx.getInferenceSession(modelPath, runnerChoice);
         waveformInputName = ResolveWaveformInputName(session);
         thresholdInputName = ResolveThresholdInputName(session);
         f0OutputName = ResolveF0OutputName(session);

@@ -472,7 +472,7 @@ namespace OpenUtau.App.ViewModels {
                 double stepMs = Frq.kHopSize * 1000.0 / 44100;
                 int count = 0;
                 if (method == "rmvpe") {
-                    using var rmvpe = new RmvpeTranscriber();
+                    using var rmvpe = new RmvpeTranscriber(OnnxRunnerChoice.Default);
                     foreach (string file in files) {
                         if (!File.Exists(file)) {
                             throw new FileNotFoundException(string.Format("File {0} missing!", file));
