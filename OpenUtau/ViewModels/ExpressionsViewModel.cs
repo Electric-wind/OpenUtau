@@ -105,10 +105,11 @@ namespace OpenUtau.App.ViewModels {
                 case UExpressionType.Numerical:
                     return new UExpressionDescriptor(Name.Trim(), Abbr.Trim().ToLower(), Min, Max, DefaultValue, Flag, CustomeDefaultValue, SkipOutputIfDefault);
                 case UExpressionType.Options:
-                    return new UExpressionDescriptor(Name.Trim(), Abbr.Trim().ToLower(), IsFlag, OptionValues.Split(','));
+                    return new UExpressionDescriptor(Name.Trim(), Abbr.Trim().ToLower(), IsFlag, OptionValues.Split(','), SkipOutputIfDefault);
                 case UExpressionType.Curve:
                     return new UExpressionDescriptor(Name.Trim(), Abbr.Trim().ToLower(), Min, Max, DefaultValue) {
                         type = UExpressionType.Curve,
+                        skipOutputIfDefault = SkipOutputIfDefault,
                     };
             }
             throw new Exception("Unexpected expression type");

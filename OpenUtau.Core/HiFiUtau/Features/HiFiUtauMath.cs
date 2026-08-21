@@ -299,8 +299,13 @@ namespace OpenUtau.Core.HiFiUtau {
             return result;
         }
 
-        public static void ApplyPhraseEdgeEnvelope(HiFiUtauPhone[] phones, float[] samples, int sampleRate) {
-            if (samples.Length == 0 || phones.Length == 0) {
+        public static void ApplyPhraseEdgeEnvelope(
+            HiFiUtauPhone[] phones,
+            float[] samples,
+            int sampleRate,
+            double samplesPerModelFrame) {
+            if (samples.Length == 0 || phones.Length == 0 || sampleRate <= 0 ||
+                !double.IsFinite(samplesPerModelFrame) || samplesPerModelFrame <= 0) {
                 return;
             }
             // Fade-in: linear 0 → 1.0 across p0.X to p1.X
@@ -312,6 +317,32 @@ namespace OpenUtau.Core.HiFiUtau {
                     samples[i] *= (float)i / (fadeIn - 1);
                 }
             }
+
+            // SharpWavtool applies each segment's p3→p4 release before mixing.
+            // The model has one combined waveform, so apply the same release only
+            // where no following phone overlaps it.
+            for (int phoneIndex = 0; phoneIndex + 1 < phones.Length; phoneIndex++) {
+                var phone = phones[phoneIndex];
+                var next = phones[phoneIndex + 1];
+                if (phone.ModelEndFrame > next.ModelStartFrame ||
+                    phone.Envelope == null || phone.Envelope.Length < 5) {
+                    continue;
+                }
+                int fadeEnd = Math.Clamp(
+                    (int)Math.Round(phone.ModelEndFrame * samplesPerModelFrame),
+                    0,
+                    samples.Length);
+                int fadeSamples = Math.Max(0, (int)Math.Round(
+                    (phone.Envelope[4].X - phone.Envelope[3].X) * sampleRate / 1000.0));
+                int fadeStart = Math.Max(0, fadeEnd - fadeSamples);
+                ApplyLinearGain(
+                    samples,
+                    fadeStart,
+                    fadeEnd,
+                    phone.Envelope[3].Y / 100f,
+                    phone.Envelope[4].Y / 100f);
+            }
+
             // Fade-out: linear 1.0 → 0 across p3.X to p4.X
             var last = phones[^1].Envelope;
             int fadeOut = Math.Max(0, (int)Math.Round((last[4].X - last[3].X) * sampleRate / 1000.0));
@@ -320,6 +351,21 @@ namespace OpenUtau.Core.HiFiUtau {
                 for (int i = 0; i < fadeOut; i++) {
                     samples[samples.Length - fadeOut + i] *= (float)(fadeOut - 1 - i) / (fadeOut - 1);
                 }
+            }
+        }
+
+        static void ApplyLinearGain(float[] samples, int start, int end, float startGain, float endGain) {
+            int length = end - start;
+            if (length <= 0) {
+                return;
+            }
+            if (length == 1) {
+                samples[start] *= endGain;
+                return;
+            }
+            for (int i = 0; i < length; i++) {
+                float alpha = i / (float)(length - 1);
+                samples[start + i] *= startGain + (endGain - startGain) * alpha;
             }
         }
 
@@ -363,14 +409,23 @@ namespace OpenUtau.Core.HiFiUtau {
         }
 
         public static float[,] ResamplePhoneMel(float[,] mel, int totalFrames, int conFramesOrig, int targetConFrames, int vowFramesOrig, double stretch) {
+            totalFrames = Math.Max(1, totalFrames);
             int bins = mel.GetLength(0);
             int frames = mel.GetLength(1);
             var result = new float[bins, totalFrames];
-            int targetVowFrames = Math.Max(1, totalFrames - targetConFrames);
+            targetConFrames = Math.Clamp(targetConFrames, 0, totalFrames);
+            int targetVowFrames = totalFrames - targetConFrames;
             for (int t = 0; t < totalFrames; t++) {
-                double src = t < targetConFrames
-                    ? t / stretch
-                    : conFramesOrig + (t - targetConFrames) * (vowFramesOrig / (double)targetVowFrames);
+                double src;
+                if (t < targetConFrames) {
+                    src = t / stretch;
+                } else if (targetVowFrames > 0) {
+                    src = conFramesOrig + (t - targetConFrames) * (vowFramesOrig / (double)targetVowFrames);
+                } else {
+                    // No vowel frames remain. Do not force a jump to the source
+                    // tail; the fixed-region prefix above is the complete output.
+                    src = t / stretch;
+                }
                 src = Math.Clamp(src, 0, frames - 1);
                 int i0 = (int)Math.Floor(src);
                 int i1 = Math.Min(frames - 1, i0 + 1);
@@ -389,7 +444,7 @@ namespace OpenUtau.Core.HiFiUtau {
         /// </summary>
         public static float[,] ResamplePhoneMelLoop(float[,] mel, int totalFrames, int conFramesOrig, int targetConFrames, int vowFramesOrig, double stretch) {
             totalFrames = Math.Max(1, totalFrames);
-            targetConFrames = Math.Clamp(targetConFrames, 0, totalFrames - 1);
+            targetConFrames = Math.Clamp(targetConFrames, 0, totalFrames);
             int bins = mel.GetLength(0);
             if (bins == 0 || mel.GetLength(1) == 0) {
                 return new float[bins, totalFrames];

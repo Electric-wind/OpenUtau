@@ -112,7 +112,11 @@ namespace OpenUtau.Core.HiFiUtau {
                             if (cancellation.IsCancellationRequested) {
                                 return result;
                             }
-                            HiFiUtauMath.ApplyPhraseEdgeEnvelope(phones, result.samples, HiFiUtauConfig.OutputSampleRate);
+                            HiFiUtauMath.ApplyPhraseEdgeEnvelope(
+                                phones,
+                                result.samples,
+                                HiFiUtauConfig.OutputSampleRate,
+                                model.Config.ModelHop * (double)HiFiUtauConfig.OutputSampleRate / model.Config.SampleRate);
                             WriteCacheWave(rawWavPath, result.samples);
                         }
                         if (result.samples != null) {
@@ -138,10 +142,17 @@ namespace OpenUtau.Core.HiFiUtau {
                                 var pitchHzCurve = AudioPostProcessingDsp.PitchHzCurve(phrase, result.samples.Length);
                                 AudioPostProcessor.ApplyGrowl(result.samples, postCurves.Growl, AudioPostProcessingDsp.SampleRate, pitchHzCurve);
                             }
+                            double samplesPerModelFrame =
+                                model.Config.ModelHop * (double)HiFiUtauConfig.OutputSampleRate / model.Config.SampleRate;
+                            HiFiUtauLoudnessNormalizer.NormalizePhonesInPlace(
+                                result.samples,
+                                phones,
+                                HiFiUtauConfig.OutputSampleRate,
+                                samplesPerModelFrame);
                             ApplyPhoneVolumes(
                                 result.samples,
                                 phones,
-                                model.Config.ModelHop * (double)HiFiUtauConfig.OutputSampleRate / model.Config.SampleRate);
+                                samplesPerModelFrame);
                             // Classic direct audio bypasses the resampler/model post-processing and VOL stage.
                             // Its envelope already contains VOL, so insert it immediately before Dynamics.
                             ApplyDirectPhones(result.samples, phones, phrase, HiFiUtauConfig.OutputSampleRate);
@@ -160,7 +171,7 @@ namespace OpenUtau.Core.HiFiUtau {
         static ulong ComputeRawHash(RenderPhrase phrase) {
             using var stream = new MemoryStream();
             using (var writer = new BinaryWriter(stream)) {
-                writer.Write("hifiutau-v10-mel-normalization-classic-direct");
+                writer.Write("hifiutau-v18");
                 writer.Write(phrase.preEffectHash);
                 WriteCurve(writer, phrase.pitches);
                 WriteCurve(writer, phrase.gender);
@@ -405,7 +416,9 @@ namespace OpenUtau.Core.HiFiUtau {
             double totalBudgetMs = phone.Envelope[4].X + phone.PreutterMs * stretch;
             int totalFrames = Math.Max(1, (int)(totalBudgetMs / config.MsPerFeatureFrame));
             int targetConFrames = Math.Max(1, (int)(conFramesOrig * stretch));
-            targetConFrames = Math.Min(targetConFrames, Math.Max(1, totalFrames - 1));
+            // A fixed region may occupy the complete destination. Keep it
+            // monotonic instead of reserving a fake one-frame vowel tail.
+            targetConFrames = Math.Min(targetConFrames, totalFrames);
 
             var melOut = phone.StretchMode == (int)StretchMode.Loop
                 ? HiFiUtauMath.ResamplePhoneMelLoop(
@@ -439,14 +452,6 @@ namespace OpenUtau.Core.HiFiUtau {
         static void ApplyPerPhoneControls(HiFiUtauPhone phone) {
             if (phone.Mel == null || phone.Mel.GetLength(1) == 0) {
                 return;
-            }
-            var normalize = phone.Normalize / 100.0;
-            if (normalize > 0) {
-                double rms = HiFiUtauMath.MelRms(phone.Mel);
-                if (rms > 1e-12) {
-                    double target = rms * (1 - normalize) + 0.5 * normalize;
-                    HiFiUtauMath.AddLogGain(phone.Mel, Math.Log(target / rms));
-                }
             }
             if (phone.Gender != null && phone.Gender.Any(value => Math.Abs(value) > 0.001f)) {
                 HiFiUtauMath.WarpMelFrequency(phone.Mel, phone.Gender.Select(value => -value / 100f).ToArray());
@@ -524,7 +529,7 @@ namespace OpenUtau.Core.HiFiUtau {
             if (phone.Mel == null || phone.Mel.GetLength(1) == 0) {
                 return;
             }
-            // Apply the crossfade envelope after phtp. VOL is applied to the normalized waveform later.
+            // Apply the crossfade envelope after phtp. VOL is applied to the synthesized waveform later.
             if (phone.Envelope != null && phone.Envelope.Length >= 5) {
                 HiFiUtauMath.ApplyEnvelopeToMel(phone.Mel, phone.Envelope);
             }
@@ -604,8 +609,8 @@ namespace OpenUtau.Core.HiFiUtau {
 
         public UExpressionDescriptor[] GetSuggestedExpressions(USinger singer, URenderSettings renderSettings) {
             return new[] {
-                new UExpressionDescriptor("phoneme type", "phtp", true, new[] { "normal", "follow next", "follow previous" }),
-                new UExpressionDescriptor("stretch mode", "stm", true, new[] { "none", "loop" }),
+                new UExpressionDescriptor("phoneme type", "phtp", true, new[] { "normal", "follow next", "follow previous" }, skipOutputIfDefault: true),
+                new UExpressionDescriptor("stretch mode", "stm", true, new[] { "none", "loop" }, skipOutputIfDefault: true),
                 new UExpressionDescriptor("direct", Format.Ustx.DIR, false, new[] { "off", "on" }),
                 new UExpressionDescriptor("modulation plus", Format.Ustx.MODP, 0, 100, 0),
                 new UExpressionDescriptor {
@@ -616,6 +621,7 @@ namespace OpenUtau.Core.HiFiUtau {
                     max = 100,
                     defaultValue = 0,
                     isFlag = false,
+                    skipOutputIfDefault = true,
                 },
                 new UExpressionDescriptor {
                     name = "breath high (curve)",
@@ -625,6 +631,7 @@ namespace OpenUtau.Core.HiFiUtau {
                     max = 100,
                     defaultValue = 0,
                     isFlag = false,
+                    skipOutputIfDefault = true,
                 },
                 new UExpressionDescriptor {
                     name = "brightness (curve)",
@@ -634,6 +641,7 @@ namespace OpenUtau.Core.HiFiUtau {
                     max = 100,
                     defaultValue = 0,
                     isFlag = false,
+                    skipOutputIfDefault = true,
                 },
                 new UExpressionDescriptor {
                     name = "growl (curve)",
@@ -643,6 +651,7 @@ namespace OpenUtau.Core.HiFiUtau {
                     max = 100,
                     defaultValue = 0,
                     isFlag = false,
+                    skipOutputIfDefault = true,
                 },
             };
         }
