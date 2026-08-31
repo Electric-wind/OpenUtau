@@ -142,62 +142,66 @@ namespace OpenUtau.App.Controls {
                 context.DrawLine(lPen3, new Point(x3, defaultHeight), new Point(x4, defaultHeight));
 
                 curveSelection.GetWholeCurveAndSelection(descriptor.abbr, curve, out List<int> xs, out List<int> ys);
+                bool drewEffectiveCurve = DrawHiFiUtauEffectiveCurve(
+                    context, viewModel, project, track, descriptor, xs, ys, leftTick, rightTick, defaultHeight);
                 if (curve == null) {
-                    xs.Insert(0, (int)leftTick);
-                    xs.Add((int)rightTick);
-                    for (int i = 0; i < xs.Count - 1; i++) {
-                        double x1 = Math.Round(viewModel.TickToneToPoint(xs[i], 0).X);
-                        double x2 = Math.Round(viewModel.TickToneToPoint(xs[i + 1], 0).X);
-                        if (curveSelection.HasValue(descriptor.abbr)) {
-                            if (curveSelection.StartPoint.x <= xs[i] && xs[i] <= curveSelection.EndPoint.x
-                                && curveSelection.StartPoint.x <= xs[i + 1] && xs[i + 1] <= curveSelection.EndPoint.x) {
-                                context.DrawLine(lPenSelected, new Point(x1, defaultHeight), new Point(x2, defaultHeight));
+                    if (!drewEffectiveCurve) {
+                        xs.Insert(0, (int)leftTick);
+                        xs.Add((int)rightTick);
+                        for (int i = 0; i < xs.Count - 1; i++) {
+                            double x1 = Math.Round(viewModel.TickToneToPoint(xs[i], 0).X);
+                            double x2 = Math.Round(viewModel.TickToneToPoint(xs[i + 1], 0).X);
+                            if (curveSelection.HasValue(descriptor.abbr)) {
+                                if (curveSelection.StartPoint.x <= xs[i] && xs[i] <= curveSelection.EndPoint.x
+                                    && curveSelection.StartPoint.x <= xs[i + 1] && xs[i + 1] <= curveSelection.EndPoint.x) {
+                                    context.DrawLine(lPenSelected, new Point(x1, defaultHeight), new Point(x2, defaultHeight));
+                                } else {
+                                    context.DrawLine(lPen, new Point(x1, defaultHeight), new Point(x2, defaultHeight));
+                                }
                             } else {
                                 context.DrawLine(lPen, new Point(x1, defaultHeight), new Point(x2, defaultHeight));
                             }
-                        } else {
-                            context.DrawLine(lPen, new Point(x1, defaultHeight), new Point(x2, defaultHeight));
                         }
                     }
-                    DrawHiFiUtauNoteCurveOverrides(
-                        context, viewModel, project, track, descriptor, null, leftTick, rightTick, defaultHeight);
                     return;
                 }
 
                 int lTick = (int)Math.Floor(leftTick / 5) * 5;
                 int rTick = (int)Math.Ceiling(rightTick / 5) * 5;
-                int index = xs.BinarySearch(lTick);
-                if (index < 0) {
-                    index = -index - 1;
-                }
-                index = Math.Max(0, index) - 1;
-                while (index < xs.Count) {
-                    float tick1 = index < 0 ? lTick : xs[index];
-                    float value1 = index < 0 ? descriptor.defaultValue : ys[index];
-                    double x1 = viewModel.TickToneToPoint(tick1, 0).X;
-                    double y1 = defaultHeight - Bounds.Height * (value1 - descriptor.defaultValue) / (descriptor.max - descriptor.min);
-                    float tick2 = index == xs.Count - 1 ? rTick : xs[index + 1];
-                    float value2 = index == xs.Count - 1 ? descriptor.defaultValue : ys[index + 1];
-                    double x2 = viewModel.TickToneToPoint(tick2, 0).X;
-                    double y2 = defaultHeight - Bounds.Height * (value2 - descriptor.defaultValue) / (descriptor.max - descriptor.min);
-                    IPen pen;
-                    if (curveSelection.HasValue(descriptor.abbr)) {
-                        if (curveSelection.StartPoint.x <= tick1 && tick1 <= curveSelection.EndPoint.x
-                            && curveSelection.StartPoint.x <= tick2 && tick2 <= curveSelection.EndPoint.x) {
-                            pen = value1 == descriptor.defaultValue && value2 == descriptor.defaultValue ? lPenSelected : lPen2Selected;
+                if (!drewEffectiveCurve) {
+                    int index = xs.BinarySearch(lTick);
+                    if (index < 0) {
+                        index = -index - 1;
+                    }
+                    index = Math.Max(0, index) - 1;
+                    while (index < xs.Count) {
+                        float tick1 = index < 0 ? lTick : xs[index];
+                        float value1 = index < 0 ? descriptor.defaultValue : ys[index];
+                        double x1 = viewModel.TickToneToPoint(tick1, 0).X;
+                        double y1 = defaultHeight - Bounds.Height * (value1 - descriptor.defaultValue) / (descriptor.max - descriptor.min);
+                        float tick2 = index == xs.Count - 1 ? rTick : xs[index + 1];
+                        float value2 = index == xs.Count - 1 ? descriptor.defaultValue : ys[index + 1];
+                        double x2 = viewModel.TickToneToPoint(tick2, 0).X;
+                        double y2 = defaultHeight - Bounds.Height * (value2 - descriptor.defaultValue) / (descriptor.max - descriptor.min);
+                        IPen pen;
+                        if (curveSelection.HasValue(descriptor.abbr)) {
+                            if (curveSelection.StartPoint.x <= tick1 && tick1 <= curveSelection.EndPoint.x
+                                && curveSelection.StartPoint.x <= tick2 && tick2 <= curveSelection.EndPoint.x) {
+                                pen = value1 == descriptor.defaultValue && value2 == descriptor.defaultValue ? lPenSelected : lPen2Selected;
+                            } else {
+                                pen = value1 == descriptor.defaultValue && value2 == descriptor.defaultValue ? lPen : lPen2;
+                            }
                         } else {
                             pen = value1 == descriptor.defaultValue && value2 == descriptor.defaultValue ? lPen : lPen2;
                         }
-                    } else {
-                        pen = value1 == descriptor.defaultValue && value2 == descriptor.defaultValue ? lPen : lPen2;
-                    }
-                    context.DrawLine(pen, new Point(x1, y1), new Point(x2, y2));
-                    //using (var state = context.PushTransform(Matrix.CreateTranslation(x1, y1))) {
-                    //    context.DrawGeometry(brush, null, pointGeometry);
-                    //}
-                    index++;
-                    if (tick2 >= rTick) {
-                        break;
+                        context.DrawLine(pen, new Point(x1, y1), new Point(x2, y2));
+                        //using (var state = context.PushTransform(Matrix.CreateTranslation(x1, y1))) {
+                        //    context.DrawGeometry(brush, null, pointGeometry);
+                        //}
+                        index++;
+                        if (tick2 >= rTick) {
+                            break;
+                        }
                     }
                 }
                 if (ShowRealCurve) {
@@ -249,8 +253,6 @@ namespace OpenUtau.App.Controls {
                         offset = end;
                     }
                 }
-                DrawHiFiUtauNoteCurveOverrides(
-                    context, viewModel, project, track, descriptor, curve, leftTick, rightTick, defaultHeight);
                 return;
             }
             foreach (var phoneme in Part.phonemes) {
@@ -314,61 +316,88 @@ namespace OpenUtau.App.Controls {
             }
         }
 
-        void DrawHiFiUtauNoteCurveOverrides(
+        bool DrawHiFiUtauEffectiveCurve(
             DrawingContext context,
             NotesViewModel viewModel,
             UProject project,
             UTrack track,
             UExpressionDescriptor descriptor,
-            UCurve? curve,
+            List<int> curveXs,
+            List<int> curveYs,
             double leftTick,
             double rightTick,
             double defaultHeight) {
             if (track.RendererSettings.renderer != Renderers.HIFIUTAU ||
                 !hifiUtauNoteCurves.Contains(descriptor.abbr)) {
-                return;
+                return false;
             }
-            foreach (var phoneme in Part!.phonemes) {
-                if (phoneme.Error || phoneme.Parent == null ||
-                    phoneme.position >= rightTick || phoneme.End <= leftTick) {
-                    continue;
-                }
-                var (noteValue, overridden) = phoneme.GetExpression(project, track, descriptor.abbr);
-                if (!overridden) {
-                    continue;
-                }
-                double startTick = Math.Max(phoneme.position, leftTick);
-                double endTick = Math.Min(phoneme.End, rightTick);
-                var ticks = new List<double> { startTick };
-                if (curve != null) {
-                    ticks.AddRange(curve.xs
-                        .Where(tick => tick > startTick && tick < endTick)
-                        .Select(tick => (double)tick));
-                }
-                ticks.Add(endTick);
+            var overrides = Part!.phonemes
+                .Where(phoneme => !phoneme.Error && phoneme.Parent != null)
+                .Select(phoneme => (phoneme, expression: phoneme.GetExpression(project, track, descriptor.abbr)))
+                .Where(item => item.expression.Item2)
+                .ToList();
+            if (overrides.Count == 0) {
+                return false;
+            }
 
-                var pen = ThemeManager.AccentPen1Thickness2;
-                for (int i = 0; i < ticks.Count - 1; i++) {
-                    double tick1 = ticks[i];
-                    double tick2 = ticks[i + 1];
-                    float value1 = GetEffectiveValue(tick1);
-                    float value2 = GetEffectiveValue(tick2);
-                    double x1 = viewModel.TickToneToPoint(tick1, 0).X;
-                    double x2 = viewModel.TickToneToPoint(tick2, 0).X;
-                    double y1 = defaultHeight - Bounds.Height *
-                        (value1 - descriptor.defaultValue) / (descriptor.max - descriptor.min);
-                    double y2 = defaultHeight - Bounds.Height *
-                        (value2 - descriptor.defaultValue) / (descriptor.max - descriptor.min);
-                    context.DrawLine(pen, new Point(x1, y1), new Point(x2, y2));
-                }
+            int lTick = (int)Math.Floor(leftTick / UCurve.interval) * UCurve.interval;
+            int rTick = (int)Math.Ceiling(rightTick / UCurve.interval) * UCurve.interval;
+            var ticks = curveXs
+                .Concat(new[] { lTick, rTick })
+                .Concat(overrides.SelectMany(item => new[] {
+                    item.phoneme.position - UCurve.interval,
+                    item.phoneme.position,
+                    item.phoneme.End - UCurve.interval,
+                    item.phoneme.End,
+                }))
+                .Where(tick => tick >= lTick && tick <= rTick)
+                .Distinct()
+                .OrderBy(tick => tick)
+                .ToList();
+            var values = ticks.Select(GetEffectiveValue).ToList();
 
-                float GetEffectiveValue(double tick) {
-                    float baseValue = curve?.Sample((int)Math.Round(tick)) ?? descriptor.defaultValue;
-                    return Math.Clamp(
-                        baseValue + noteValue - descriptor.CustomDefaultValue,
-                        descriptor.min,
-                        descriptor.max);
+            for (int i = 0; i < ticks.Count - 1; i++) {
+                int tick1 = ticks[i];
+                int tick2 = ticks[i + 1];
+                float value1 = values[i];
+                float value2 = values[i + 1];
+                double x1 = viewModel.TickToneToPoint(tick1, 0).X;
+                double x2 = viewModel.TickToneToPoint(tick2, 0).X;
+                double y1 = defaultHeight - Bounds.Height *
+                    (value1 - descriptor.defaultValue) / (descriptor.max - descriptor.min);
+                double y2 = defaultHeight - Bounds.Height *
+                    (value2 - descriptor.defaultValue) / (descriptor.max - descriptor.min);
+                bool selected = curveSelection.HasValue(descriptor.abbr) &&
+                    curveSelection.StartPoint.x <= tick1 && tick2 <= curveSelection.EndPoint.x;
+                bool isDefault = value1 == descriptor.defaultValue && value2 == descriptor.defaultValue;
+                IPen pen = selected
+                    ? isDefault ? ThemeManager.AccentPen2 : ThemeManager.AccentPen2Thickness2
+                    : isDefault ? ThemeManager.AccentPen1 : ThemeManager.AccentPen1Thickness2;
+                context.DrawLine(pen, new Point(x1, y1), new Point(x2, y2));
+            }
+            return true;
+
+            float GetEffectiveValue(int tick) {
+                float value = SampleCurve(tick);
+                foreach (var item in overrides) {
+                    if (item.phoneme.position <= tick && tick < item.phoneme.End) {
+                        value += item.expression.Item1 - descriptor.CustomDefaultValue;
+                    }
                 }
+                return Math.Clamp(value, descriptor.min, descriptor.max);
+            }
+
+            float SampleCurve(int tick) {
+                int index = curveXs.BinarySearch(tick);
+                if (index >= 0) {
+                    return curveYs[index];
+                }
+                index = ~index;
+                if (index > 0 && index < curveXs.Count) {
+                    return (float)MusicMath.Linear(
+                        curveXs[index - 1], curveXs[index], curveYs[index - 1], curveYs[index], tick);
+                }
+                return descriptor.defaultValue;
             }
         }
 
