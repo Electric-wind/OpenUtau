@@ -938,6 +938,66 @@ namespace OpenUtau.App.Views {
         }
     }
 
+    class ExpLineDrawState : NoteEditState {
+        private int firstTick;
+        private int firstValue;
+        private readonly UExpressionDescriptor descriptor;
+        private readonly bool horizontal;
+        protected override string? commandNameKey => "command.exp.edit";
+
+        public ExpLineDrawState(
+            Control control,
+            PianoRollViewModel vm,
+            IValueTip valueTip,
+            UExpressionDescriptor descriptor,
+            bool horizontal) : base(control, vm, valueTip) {
+            this.descriptor = descriptor;
+            this.horizontal = horizontal;
+        }
+
+        public override void Begin(IPointer pointer, Point point) {
+            base.Begin(pointer, point);
+            var notesVm = vm.NotesViewModel;
+            firstTick = notesVm.PointToTick(point);
+            firstValue = PointToValue(point);
+        }
+
+        public override void Update(IPointer pointer, Point point) {
+            var notesVm = vm.NotesViewModel;
+            if (notesVm.Part == null) {
+                return;
+            }
+
+            int startTick = firstTick;
+            int endTick = notesVm.PointToTick(point);
+            int startValue = firstValue;
+            int endValue = horizontal ? firstValue : PointToValue(point);
+            if (startTick > endTick) {
+                Swap(ref startTick, ref endTick);
+                Swap(ref startValue, ref endValue);
+            }
+
+            DocManager.Inst.ExecuteCmd(new SetCurveCommand(
+                notesVm.Project, notesVm.Part, notesVm.PrimaryKey,
+                startTick, startValue, startTick, startValue));
+            if (startTick != endTick) {
+                DocManager.Inst.ExecuteCmd(new SetCurveCommand(
+                    notesVm.Project, notesVm.Part, notesVm.PrimaryKey,
+                    endTick, endValue, startTick, startValue));
+            }
+            valueTip.UpdateValueTip(horizontal
+                ? $"{firstValue} (Alt)"
+                : $"{startValue} - {endValue}");
+        }
+
+        private int PointToValue(Point point) {
+            int value = (int)Math.Round(
+                descriptor.min + (descriptor.max - descriptor.min) *
+                (1 - point.Y / control.Bounds.Height));
+            return Math.Clamp(value, (int)descriptor.min, (int)descriptor.max);
+        }
+    }
+
     class VibratoChangeStartState : NoteEditState {
         public readonly UNote note;
         protected override string? commandNameKey => "command.vibrato.edit";

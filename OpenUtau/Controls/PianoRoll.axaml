@@ -611,7 +611,7 @@
         <ListBox.Items>
           <ListBoxItem Classes="toolbar cursorTool"/>
           <ListBoxItem Classes="toolbar penTool"/>
-          <!-- CurveLineTool -->
+          <ListBoxItem Classes="toolbar pitchLineTool" ToolTip.Tip="{DynamicResource pianoroll.tool.curveline}"/>
           <ListBoxItem Classes="toolbar eraserTool"/>
         </ListBox.Items>
       </ListBox>
