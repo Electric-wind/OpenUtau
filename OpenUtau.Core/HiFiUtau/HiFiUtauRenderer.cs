@@ -172,10 +172,11 @@ namespace OpenUtau.Core.HiFiUtau {
         static ulong ComputeRawHash(RenderPhrase phrase) {
             using var stream = new MemoryStream();
             using (var writer = new BinaryWriter(stream)) {
-                writer.Write("hifiutau-v10-note-expressions");
+                writer.Write("hifiutau-v11-note-expression-priority");
                 writer.Write(phrase.preEffectHash);
                 WriteCurve(writer, phrase.pitches);
                 WriteCurve(writer, phrase.gender);
+                WriteCurveActivity(writer, phrase.genderCurveActive);
                 WriteCurve(writer, phrase.toneShift);
                 WriteCurve(writer, GetCurve(phrase, "gwlc"));
                 foreach (var phone in phrase.phones) {
@@ -553,7 +554,9 @@ namespace OpenUtau.Core.HiFiUtau {
                 float value = phone.GenderValue;
                 if (hasPhraseCurve) {
                     int idx = Math.Clamp(ticks / DynamicInterval, 0, phrase.gender.Length - 1);
-                    value += phrase.gender[idx];
+                    if (idx < phrase.genderCurveActive.Length && phrase.genderCurveActive[idx]) {
+                        value = phrase.gender[idx];
+                    }
                 }
                 gender[i] = Math.Clamp(value, -100, 100);
             }
@@ -698,11 +701,14 @@ namespace OpenUtau.Core.HiFiUtau {
 
             public static PostProcessCurves FromPhrase(RenderPhrase phrase, HiFiUtauPhone[] phones) {
                 var breathiness = MergePhoneValues(
-                    phrase, phones, phrase.breathiness, phone => phone.BreathinessValue, 0, -100, 100);
+                    phrase, phones, phrase.breathiness, phrase.breathinessCurveActive,
+                    phone => phone.BreathinessValue, 0, -100, 100);
                 var tension = MergePhoneValues(
-                    phrase, phones, phrase.tension, phone => phone.TensionValue, 0, -100, 100);
+                    phrase, phones, phrase.tension, phrase.tensionCurveActive,
+                    phone => phone.TensionValue, 0, -100, 100);
                 var voicing = MergePhoneValues(
-                    phrase, phones, phrase.voicing, phone => phone.VoicingValue, 100, 0, 100);
+                    phrase, phones, phrase.voicing, phrase.voicingCurveActive,
+                    phone => phone.VoicingValue, 100, 0, 100);
                 var brel = GetCurve(phrase, "brel");
                 var breh = GetCurve(phrase, "breh");
                 var bri = GetCurve(phrase, "bric");
@@ -722,6 +728,7 @@ namespace OpenUtau.Core.HiFiUtau {
                 RenderPhrase phrase,
                 HiFiUtauPhone[] phones,
                 float[]? phraseCurve,
+                bool[] curveActive,
                 Func<HiFiUtauPhone, float> valueSelector,
                 float defaultValue,
                 float min,
@@ -743,8 +750,8 @@ namespace OpenUtau.Core.HiFiUtau {
                     }
                 }
                 foreach (var phone in phones) {
-                    float delta = valueSelector(phone) - defaultValue;
-                    if (Math.Abs(delta) <= 0.5f) {
+                    float phoneValue = valueSelector(phone);
+                    if (Math.Abs(phoneValue - defaultValue) <= 0.5f) {
                         continue;
                     }
                     int startTick = phrase.timeAxis.MsPosToTickPos(phone.PositionMs + phone.Envelope[0].X)
@@ -754,10 +761,19 @@ namespace OpenUtau.Core.HiFiUtau {
                     int start = Math.Clamp(startTick / DynamicInterval, 0, curve.Length - 1);
                     int end = Math.Clamp((int)Math.Ceiling(endTick / (double)DynamicInterval), start + 1, curve.Length);
                     for (int i = start; i < end; i++) {
-                        curve[i] = Math.Clamp(curve[i] + delta, min, max);
+                        if (i >= curveActive.Length || !curveActive[i]) {
+                            curve[i] = Math.Clamp(phoneValue, min, max);
+                        }
                     }
                 }
                 return curve;
+            }
+        }
+
+        static void WriteCurveActivity(BinaryWriter writer, bool[] activity) {
+            writer.Write(activity.Length);
+            foreach (var value in activity) {
+                writer.Write(value);
             }
         }
     }

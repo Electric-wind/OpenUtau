@@ -378,14 +378,19 @@ namespace OpenUtau.App.Controls {
             return true;
 
             float GetEffectiveValue(int tick) {
-                float value = SampleCurve(tick);
                 foreach (var item in overrides) {
                     if (item.phoneme.position <= tick && tick < item.phoneme.End) {
-                        value += item.expression.Item1 - descriptor.CustomDefaultValue;
+                        if (!HasDrawnCurveAt(tick)) {
+                            return item.expression.Item1;
+                        }
+                        break;
                     }
                 }
-                return Math.Clamp(value, descriptor.min, descriptor.max);
+                return SampleCurve(tick);
             }
+
+            bool HasDrawnCurveAt(int tick) =>
+                curveXs.Count > 0 && curveXs[0] <= tick && tick <= curveXs[^1];
 
             float SampleCurve(int tick) {
                 int index = curveXs.BinarySearch(tick);

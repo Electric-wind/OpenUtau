@@ -195,10 +195,14 @@ namespace OpenUtau.Core.Render {
         public readonly float[] pitchesBeforeDeviation;
         public readonly float[] dynamics;
         public readonly float[] gender;
+        public readonly bool[] genderCurveActive = Array.Empty<bool>();
         public readonly float[] breathiness;
+        public readonly bool[] breathinessCurveActive = Array.Empty<bool>();
         public readonly float[] toneShift;
         public readonly float[] tension;
+        public readonly bool[] tensionCurveActive = Array.Empty<bool>();
         public readonly float[] voicing;
+        public readonly bool[] voicingCurveActive = Array.Empty<bool>();
         public readonly Tuple<string, float[]>[] curves;//custom curves defined by renderer
         public readonly ulong preEffectHash;
         public readonly ulong hash;
@@ -453,10 +457,22 @@ namespace OpenUtau.Core.Render {
                     case Format.Ustx.PITD: break;
                     case Format.Ustx.DYN : dynamics = curveSampled; break;
                     case Format.Ustx.SHFC: toneShift = curveSampled; break;
-                    case Format.Ustx.GENC: gender = curveSampled; break;
-                    case Format.Ustx.TENC: tension = curveSampled; break;
-                    case Format.Ustx.BREC: breathiness = curveSampled; break;
-                    case Format.Ustx.VOIC: voicing = curveSampled; break;
+                    case Format.Ustx.GENC:
+                        gender = curveSampled;
+                        genderCurveActive = SampleCurveActivity(curve, pitchStart, pitches.Length);
+                        break;
+                    case Format.Ustx.TENC:
+                        tension = curveSampled;
+                        tensionCurveActive = SampleCurveActivity(curve, pitchStart, pitches.Length);
+                        break;
+                    case Format.Ustx.BREC:
+                        breathiness = curveSampled;
+                        breathinessCurveActive = SampleCurveActivity(curve, pitchStart, pitches.Length);
+                        break;
+                    case Format.Ustx.VOIC:
+                        voicing = curveSampled;
+                        voicingCurveActive = SampleCurveActivity(curve, pitchStart, pitches.Length);
+                        break;
                     default:
                         curves.Add(Tuple.Create(curve.abbr,curveSampled));
                         break;
@@ -494,6 +510,20 @@ namespace OpenUtau.Core.Render {
             return result;
         }
 
+        private static bool[] SampleCurveActivity(UCurve curve, int start, int length) {
+            var result = new bool[length];
+            if (curve.xs == null || curve.xs.Count == 0) {
+                return result;
+            }
+            int first = curve.xs[0];
+            int last = curve.xs[^1];
+            for (int i = 0; i < length; i++) {
+                int tick = start + i * UCurve.interval;
+                result[i] = first <= tick && tick <= last;
+            }
+            return result;
+        }
+
         private static float[] SampleCurve(UVoicePart part, string abbr, int start, int length, Func<float, UCurve, float> convert) {
             var curve = part.curves.FirstOrDefault(c => c.abbr == abbr);
             if (curve == null) {
@@ -520,6 +550,11 @@ namespace OpenUtau.Core.Render {
                                 foreach (var v in array) {
                                     writer.Write(v);
                                 }
+                            }
+                        }
+                        foreach (var active in new bool[][] { genderCurveActive, breathinessCurveActive, tensionCurveActive, voicingCurveActive }) {
+                            foreach (var value in active) {
+                                writer.Write(value);
                             }
                         }
                         foreach(var curve in curves) {
