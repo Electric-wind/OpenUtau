@@ -22,6 +22,10 @@ namespace OpenUtau.Core.HiFiUtau {
         public double Volume;
         public bool Direct;
         public int ToneShift;
+        public float GenderValue;
+        public float BreathinessValue;
+        public float TensionValue;
+        public float VoicingValue;
         public double Normalize;
         public int PhonemeType;
         public int StretchMode; // 0=None, 1=Loop, see StretchMode enum
@@ -49,6 +53,10 @@ namespace OpenUtau.Core.HiFiUtau {
                 Volume = phone.volume,
                 Direct = phone.direct,
                 ToneShift = phone.toneShift,
+                GenderValue = phone.gender,
+                BreathinessValue = phone.breathiness,
+                TensionValue = phone.tension,
+                VoicingValue = phone.voicing,
                 Normalize = GetFlag(phone, "P", 86),
                 PhonemeType = ParsePhtpFlag(phone),
                 StretchMode = ParseStmFlag(phone),

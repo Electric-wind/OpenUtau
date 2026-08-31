@@ -12,6 +12,7 @@ using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
 using SharpCompress;
 using OpenUtau.Api;
+using OpenUtau.Core.Render;
 
 namespace OpenUtau.App.ViewModels {
     public class NotePropertiesViewModel : ViewModelBase, ICmdSubscriber {
@@ -82,6 +83,13 @@ namespace OpenUtau.App.ViewModels {
         public UVoicePart? Part;
         private HashSet<UNote> selectedNotes = new HashSet<UNote>();
         public List<NotePropertyExpViewModel> Expressions = new List<NotePropertyExpViewModel>();
+        static readonly UExpressionDescriptor[] hifiUtauNoteExpressions = new[] {
+            new UExpressionDescriptor("gender (curve)", Ustx.GENC, -100, 100, 0),
+            new UExpressionDescriptor("breathiness (curve)", Ustx.BREC, -100, 100, 0),
+            new UExpressionDescriptor("tone shift", Ustx.SHFT, -36, 36, 0),
+            new UExpressionDescriptor("tension (curve)", Ustx.TENC, -100, 100, 0),
+            new UExpressionDescriptor("voicing (curve)", Ustx.VOIC, 0, 100, 100),
+        };
         public static bool PanelControlPressed { get; set; } = false;
         public static bool NoteLoading { get; set; } = false;
         private static bool AllowNoteEdit { get => PanelControlPressed && !NoteLoading; }
@@ -228,23 +236,35 @@ namespace OpenUtau.App.ViewModels {
             if (part != null && part is UVoicePart) {
                 this.Part = part as UVoicePart;
                 var track = DocManager.Inst.Project.tracks[part.trackNo];
-                foreach (var descriptor in track.GetSupportedExps(DocManager.Inst.Project)) {
-                    if (descriptor.type != UExpressionType.Curve) {
-                        var viewModel = new NotePropertyExpViewModel(descriptor, this);
-                        if (descriptor.abbr == Ustx.CLR) {
-                            if (track.VoiceColorExp != null && track.VoiceColorExp.options.Length > 0) {
-                                viewModel.Options.Clear();
-                                Array.ForEach(track.VoiceColorExp.options, opt => viewModel.Options.Add(opt));
-                            }
+                foreach (var descriptor in GetNotePropertyExpressions(track)) {
+                    var viewModel = new NotePropertyExpViewModel(descriptor, this);
+                    if (descriptor.abbr == Ustx.CLR) {
+                        if (track.VoiceColorExp != null && track.VoiceColorExp.options.Length > 0) {
+                            viewModel.Options.Clear();
+                            Array.ForEach(track.VoiceColorExp.options, opt => viewModel.Options.Add(opt));
                         }
-                        Expressions.Add(viewModel);
                     }
+                    Expressions.Add(viewModel);
                 }
                 AttachExpressions();
                 RefreshPhonemizers();
             } else {
                 this.Part = null;
             }
+        }
+
+        IEnumerable<UExpressionDescriptor> GetNotePropertyExpressions(UTrack track) {
+            var descriptors = track.GetSupportedExps(DocManager.Inst.Project)
+                .Where(descriptor => descriptor.type != UExpressionType.Curve)
+                .ToList();
+            if (track.RendererSettings.renderer == Renderers.HIFIUTAU) {
+                foreach (var descriptor in hifiUtauNoteExpressions) {
+                    if (!descriptors.Any(existing => existing.abbr == descriptor.abbr)) {
+                        descriptors.Add(descriptor);
+                    }
+                }
+            }
+            return descriptors;
         }
 
         private string GetPhonemizerDisplayName(string? targetId) {

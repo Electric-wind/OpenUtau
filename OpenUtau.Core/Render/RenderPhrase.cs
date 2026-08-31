@@ -69,6 +69,10 @@ namespace OpenUtau.Core.Render {
         public readonly float volume;
         public readonly float velocity;
         public readonly float modulation;
+        public readonly float gender;
+        public readonly float breathiness;
+        public readonly float tension;
+        public readonly float voicing;
         public readonly bool direct;
         public readonly Vector2[] envelope;
 
@@ -123,6 +127,10 @@ namespace OpenUtau.Core.Render {
             volume = phoneme.GetExpression(project, track, Format.Ustx.VOL).Item1 * 0.01f;
             velocity = phoneme.GetExpression(project, track, Format.Ustx.VEL).Item1 * 0.01f;
             modulation = phoneme.GetExpression(project, track, Format.Ustx.MOD).Item1 * 0.01f;
+            gender = phoneme.GetExpression(project, track, Format.Ustx.GENC).Item1;
+            breathiness = phoneme.GetExpression(project, track, Format.Ustx.BREC).Item1;
+            tension = phoneme.GetExpression(project, track, Format.Ustx.TENC).Item1;
+            voicing = phoneme.GetExpression(project, track, Format.Ustx.VOIC).Item1;
             leadingMs = phoneme.preutter;
             envelope = phoneme.envelope.data.ToArray();
             direct = phoneme.GetExpression(project, track, Format.Ustx.DIR).Item1 == 1;
@@ -150,6 +158,10 @@ namespace OpenUtau.Core.Render {
                     writer.Write(volume);
                     writer.Write(velocity);
                     writer.Write(modulation);
+                    writer.Write(gender);
+                    writer.Write(breathiness);
+                    writer.Write(tension);
+                    writer.Write(voicing);
                     writer.Write(direct);
                     writer.Write(leadingMs);
                     foreach (var point in envelope) {

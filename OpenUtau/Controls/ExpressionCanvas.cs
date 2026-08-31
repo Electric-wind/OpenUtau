@@ -6,6 +6,7 @@ using Avalonia.Controls;
 using Avalonia.Media;
 using OpenUtau.App.ViewModels;
 using OpenUtau.Core;
+using OpenUtau.Core.Render;
 using OpenUtau.Core.Ustx;
 using OpenUtau.ViewModels;
 using ReactiveUI;
@@ -14,6 +15,13 @@ namespace OpenUtau.App.Controls {
     public enum ExpDisMode { Hidden, Visible, Shadow };
 
     class ExpressionCanvas : Control {
+        static readonly HashSet<string> hifiUtauNoteCurves = new HashSet<string> {
+            Core.Format.Ustx.GENC,
+            Core.Format.Ustx.BREC,
+            Core.Format.Ustx.TENC,
+            Core.Format.Ustx.VOIC,
+        };
+
         public static readonly DirectProperty<ExpressionCanvas, double> TickWidthProperty =
             AvaloniaProperty.RegisterDirect<ExpressionCanvas, double>(
                 nameof(TickWidth),
@@ -151,6 +159,8 @@ namespace OpenUtau.App.Controls {
                             context.DrawLine(lPen, new Point(x1, defaultHeight), new Point(x2, defaultHeight));
                         }
                     }
+                    DrawHiFiUtauNoteCurveOverrides(
+                        context, viewModel, project, track, descriptor, null, leftTick, rightTick, defaultHeight);
                     return;
                 }
 
@@ -239,6 +249,8 @@ namespace OpenUtau.App.Controls {
                         offset = end;
                     }
                 }
+                DrawHiFiUtauNoteCurveOverrides(
+                    context, viewModel, project, track, descriptor, curve, leftTick, rightTick, defaultHeight);
                 return;
             }
             foreach (var phoneme in Part.phonemes) {
@@ -298,6 +310,64 @@ namespace OpenUtau.App.Controls {
                             new Rect(new Point(-4, -0.5), size), 4, 4);
                         textLayout.Draw(context, new Point());
                     }
+                }
+            }
+        }
+
+        void DrawHiFiUtauNoteCurveOverrides(
+            DrawingContext context,
+            NotesViewModel viewModel,
+            UProject project,
+            UTrack track,
+            UExpressionDescriptor descriptor,
+            UCurve? curve,
+            double leftTick,
+            double rightTick,
+            double defaultHeight) {
+            if (track.RendererSettings.renderer != Renderers.HIFIUTAU ||
+                !hifiUtauNoteCurves.Contains(descriptor.abbr)) {
+                return;
+            }
+            foreach (var phoneme in Part!.phonemes) {
+                if (phoneme.Error || phoneme.Parent == null ||
+                    phoneme.position >= rightTick || phoneme.End <= leftTick) {
+                    continue;
+                }
+                var (noteValue, overridden) = phoneme.GetExpression(project, track, descriptor.abbr);
+                if (!overridden) {
+                    continue;
+                }
+                double startTick = Math.Max(phoneme.position, leftTick);
+                double endTick = Math.Min(phoneme.End, rightTick);
+                var ticks = new List<double> { startTick };
+                if (curve != null) {
+                    ticks.AddRange(curve.xs
+                        .Where(tick => tick > startTick && tick < endTick)
+                        .Select(tick => (double)tick));
+                }
+                ticks.Add(endTick);
+
+                var pen = ThemeManager.AccentPen1Thickness2;
+                for (int i = 0; i < ticks.Count - 1; i++) {
+                    double tick1 = ticks[i];
+                    double tick2 = ticks[i + 1];
+                    float value1 = GetEffectiveValue(tick1);
+                    float value2 = GetEffectiveValue(tick2);
+                    double x1 = viewModel.TickToneToPoint(tick1, 0).X;
+                    double x2 = viewModel.TickToneToPoint(tick2, 0).X;
+                    double y1 = defaultHeight - Bounds.Height *
+                        (value1 - descriptor.defaultValue) / (descriptor.max - descriptor.min);
+                    double y2 = defaultHeight - Bounds.Height *
+                        (value2 - descriptor.defaultValue) / (descriptor.max - descriptor.min);
+                    context.DrawLine(pen, new Point(x1, y1), new Point(x2, y2));
+                }
+
+                float GetEffectiveValue(double tick) {
+                    float baseValue = curve?.Sample((int)Math.Round(tick)) ?? descriptor.defaultValue;
+                    return Math.Clamp(
+                        baseValue + noteValue - descriptor.CustomDefaultValue,
+                        descriptor.min,
+                        descriptor.max);
                 }
             }
         }

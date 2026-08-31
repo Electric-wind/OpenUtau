@@ -29,6 +29,7 @@ namespace OpenUtau.Core.HiFiUtau {
             Format.Ustx.ATK,
             Format.Ustx.DEC,
             Format.Ustx.MODP,
+            Format.Ustx.SHFT,
             Format.Ustx.GENC,
             Format.Ustx.BREC,
             Format.Ustx.TENC,
@@ -117,7 +118,7 @@ namespace OpenUtau.Core.HiFiUtau {
                         }
                         if (result.samples != null) {
                             // HN-SEP processing with caching
-                            var postCurves = PostProcessCurves.FromPhrase(phrase);
+                            var postCurves = PostProcessCurves.FromPhrase(phrase, phones);
                             if (postCurves.NeedsHnsep) {
                                 float[] harmonic, noise;
                                 if (File.Exists(hnsepHarmonicPath) && File.Exists(hnsepNoisePath)) {
@@ -130,9 +131,11 @@ namespace OpenUtau.Core.HiFiUtau {
                                     WriteCacheWave(hnsepNoisePath, noise);
                                 }
                                 AudioPostProcessor.ApplyWithSeparated(phrase, result, harmonic, noise,
-                                    postCurves.Brel, postCurves.Breh, postCurves.Bri);
+                                    postCurves.Brel, postCurves.Breh, postCurves.Bri,
+                                    postCurves.Breathiness, postCurves.Tension, postCurves.Voicing);
                             } else {
-                                AudioPostProcessor.Apply(phrase, result);
+                                AudioPostProcessor.Apply(phrase, result,
+                                    postCurves.Breathiness, postCurves.Tension, postCurves.Voicing);
                             }
                             if (postCurves.NeedsGrowl) {
                                 var pitchHzCurve = AudioPostProcessingDsp.PitchHzCurve(phrase, result.samples.Length);
@@ -169,13 +172,14 @@ namespace OpenUtau.Core.HiFiUtau {
         static ulong ComputeRawHash(RenderPhrase phrase) {
             using var stream = new MemoryStream();
             using (var writer = new BinaryWriter(stream)) {
-                writer.Write("hifiutau-v8-fixed-region-prefix-loudness");
+                writer.Write("hifiutau-v10-note-expressions");
                 writer.Write(phrase.preEffectHash);
                 WriteCurve(writer, phrase.pitches);
                 WriteCurve(writer, phrase.gender);
                 WriteCurve(writer, phrase.toneShift);
                 WriteCurve(writer, GetCurve(phrase, "gwlc"));
                 foreach (var phone in phrase.phones) {
+                    writer.Write(phone.gender);
                     writer.Write(phone.toneShift);
                 }
             }
@@ -532,7 +536,9 @@ namespace OpenUtau.Core.HiFiUtau {
         }
 
         static float[]? SamplePhoneGender(RenderPhrase phrase, HiFiUtauPhone phone, HiFiUtauConfig config) {
-            if (phrase.gender == null || phrase.gender.Length == 0 || phone.Mel == null) {
+            bool hasPhraseCurve = phrase.gender != null && phrase.gender.Length > 0;
+            bool hasPhoneValue = Math.Abs(phone.GenderValue) > 0.001f;
+            if ((!hasPhraseCurve && !hasPhoneValue) || phone.Mel == null) {
                 return null;
             }
             int frames = phone.Mel.GetLength(1);
@@ -544,8 +550,12 @@ namespace OpenUtau.Core.HiFiUtau {
             for (int i = 0; i < frames; i++) {
                 double posMs = phoneStartMs + i * config.MsPerFeatureFrame;
                 int ticks = phrase.timeAxis.MsPosToTickPos(posMs) - (phrase.position - phrase.leading);
-                int idx = Math.Clamp(ticks / DynamicInterval, 0, phrase.gender.Length - 1);
-                gender[i] = phrase.gender[idx];
+                float value = phone.GenderValue;
+                if (hasPhraseCurve) {
+                    int idx = Math.Clamp(ticks / DynamicInterval, 0, phrase.gender.Length - 1);
+                    value += phrase.gender[idx];
+                }
+                gender[i] = Math.Clamp(value, -100, 100);
             }
             return gender;
         }
@@ -655,7 +665,19 @@ namespace OpenUtau.Core.HiFiUtau {
         public override string ToString() => Renderers.HIFIUTAU;
 
         readonly struct PostProcessCurves {
-            PostProcessCurves(float[]? brel, float[]? breh, float[]? bri, float[]? growl, bool needsHnsep, bool needsGrowl) {
+            PostProcessCurves(
+                float[]? breathiness,
+                float[]? tension,
+                float[]? voicing,
+                float[]? brel,
+                float[]? breh,
+                float[]? bri,
+                float[]? growl,
+                bool needsHnsep,
+                bool needsGrowl) {
+                Breathiness = breathiness;
+                Tension = tension;
+                Voicing = voicing;
                 Brel = brel;
                 Breh = breh;
                 Bri = bri;
@@ -664,6 +686,9 @@ namespace OpenUtau.Core.HiFiUtau {
                 NeedsGrowl = needsGrowl;
             }
 
+            public readonly float[]? Breathiness;
+            public readonly float[]? Tension;
+            public readonly float[]? Voicing;
             public readonly float[]? Brel;
             public readonly float[]? Breh;
             public readonly float[]? Bri;
@@ -671,20 +696,68 @@ namespace OpenUtau.Core.HiFiUtau {
             public readonly bool NeedsHnsep;
             public readonly bool NeedsGrowl;
 
-            public static PostProcessCurves FromPhrase(RenderPhrase phrase) {
+            public static PostProcessCurves FromPhrase(RenderPhrase phrase, HiFiUtauPhone[] phones) {
+                var breathiness = MergePhoneValues(
+                    phrase, phones, phrase.breathiness, phone => phone.BreathinessValue, 0, -100, 100);
+                var tension = MergePhoneValues(
+                    phrase, phones, phrase.tension, phone => phone.TensionValue, 0, -100, 100);
+                var voicing = MergePhoneValues(
+                    phrase, phones, phrase.voicing, phone => phone.VoicingValue, 100, 0, 100);
                 var brel = GetCurve(phrase, "brel");
                 var breh = GetCurve(phrase, "breh");
                 var bri = GetCurve(phrase, "bric");
                 var growl = GetCurve(phrase, "gwlc");
                 bool needsHnsep =
-                    AudioPostProcessor.HasNonDefaultCurve(phrase.breathiness, 0, 0.5f) ||
-                    AudioPostProcessor.HasNonDefaultCurve(phrase.tension, 0, 0.5f) ||
-                    AudioPostProcessor.HasNonDefaultCurve(phrase.voicing, 100, 0.5f) ||
+                    AudioPostProcessor.HasNonDefaultCurve(breathiness, 0, 0.5f) ||
+                    AudioPostProcessor.HasNonDefaultCurve(tension, 0, 0.5f) ||
+                    AudioPostProcessor.HasNonDefaultCurve(voicing, 100, 0.5f) ||
                     AudioPostProcessor.HasNonDefaultCurve(brel, 0, 0.5f) ||
                     AudioPostProcessor.HasNonDefaultCurve(breh, 0, 0.5f) ||
                     AudioPostProcessor.HasNonDefaultCurve(bri, 0, 0.5f);
                 bool needsGrowl = AudioPostProcessor.HasNonDefaultCurve(growl, 0, 0.5f);
-                return new PostProcessCurves(brel, breh, bri, growl, needsHnsep, needsGrowl);
+                return new PostProcessCurves(breathiness, tension, voicing, brel, breh, bri, growl, needsHnsep, needsGrowl);
+            }
+
+            static float[]? MergePhoneValues(
+                RenderPhrase phrase,
+                HiFiUtauPhone[] phones,
+                float[]? phraseCurve,
+                Func<HiFiUtauPhone, float> valueSelector,
+                float defaultValue,
+                float min,
+                float max) {
+                if (!phones.Any(phone => Math.Abs(valueSelector(phone) - defaultValue) > 0.5f)) {
+                    return phraseCurve;
+                }
+                if (phrase.pitches == null || phrase.pitches.Length == 0) {
+                    return phraseCurve;
+                }
+                var curve = new float[phrase.pitches.Length];
+                if (phraseCurve == null || phraseCurve.Length == 0) {
+                    Array.Fill(curve, defaultValue);
+                } else {
+                    int copyLength = Math.Min(curve.Length, phraseCurve.Length);
+                    Array.Copy(phraseCurve, curve, copyLength);
+                    if (copyLength < curve.Length) {
+                        Array.Fill(curve, defaultValue, copyLength, curve.Length - copyLength);
+                    }
+                }
+                foreach (var phone in phones) {
+                    float delta = valueSelector(phone) - defaultValue;
+                    if (Math.Abs(delta) <= 0.5f) {
+                        continue;
+                    }
+                    int startTick = phrase.timeAxis.MsPosToTickPos(phone.PositionMs + phone.Envelope[0].X)
+                        - (phrase.position - phrase.leading);
+                    int endTick = phrase.timeAxis.MsPosToTickPos(phone.PositionMs + phone.Envelope[4].X)
+                        - (phrase.position - phrase.leading);
+                    int start = Math.Clamp(startTick / DynamicInterval, 0, curve.Length - 1);
+                    int end = Math.Clamp((int)Math.Ceiling(endTick / (double)DynamicInterval), start + 1, curve.Length);
+                    for (int i = start; i < end; i++) {
+                        curve[i] = Math.Clamp(curve[i] + delta, min, max);
+                    }
+                }
+                return curve;
             }
         }
     }
