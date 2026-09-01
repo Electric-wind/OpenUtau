@@ -819,12 +819,6 @@ namespace OpenUtau.App.Views {
     }
 
     class ExpResetValueState : NoteEditState {
-        static readonly HashSet<string> hifiUtauNoteCurves = new HashSet<string> {
-            Ustx.GENC,
-            Ustx.BREC,
-            Ustx.TENC,
-            Ustx.VOIC,
-        };
         private Point lastPoint;
         private int minResetTick;
         private int maxResetTick;
@@ -906,8 +900,7 @@ namespace OpenUtau.App.Views {
         private void ResetFullyCoveredNoteExpressions() {
             var notesVm = vm.NotesViewModel;
             if (descriptor == null || notesVm.Part == null ||
-                track.RendererSettings.renderer != Renderers.HIFIUTAU ||
-                !hifiUtauNoteCurves.Contains(descriptor.abbr)) {
+                !track.IsHiFiUtauNoteCurve(descriptor)) {
                 return;
             }
             var notes = notesVm.Part.notes

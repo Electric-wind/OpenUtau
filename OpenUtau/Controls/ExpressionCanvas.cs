@@ -15,13 +15,6 @@ namespace OpenUtau.App.Controls {
     public enum ExpDisMode { Hidden, Visible, Shadow };
 
     class ExpressionCanvas : Control {
-        static readonly HashSet<string> hifiUtauNoteCurves = new HashSet<string> {
-            Core.Format.Ustx.GENC,
-            Core.Format.Ustx.BREC,
-            Core.Format.Ustx.TENC,
-            Core.Format.Ustx.VOIC,
-        };
-
         public static readonly DirectProperty<ExpressionCanvas, double> TickWidthProperty =
             AvaloniaProperty.RegisterDirect<ExpressionCanvas, double>(
                 nameof(TickWidth),
@@ -327,8 +320,7 @@ namespace OpenUtau.App.Controls {
             double leftTick,
             double rightTick,
             double defaultHeight) {
-            if (track.RendererSettings.renderer != Renderers.HIFIUTAU ||
-                !hifiUtauNoteCurves.Contains(descriptor.abbr)) {
+            if (!track.IsHiFiUtauNoteCurve(descriptor)) {
                 return false;
             }
             var overrides = Part!.phonemes

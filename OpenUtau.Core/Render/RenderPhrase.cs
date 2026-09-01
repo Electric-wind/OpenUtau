@@ -213,6 +213,7 @@ namespace OpenUtau.Core.Render {
         private List<string> cacheFiles = new List<string>();
 
         internal RenderPhrase(UProject project, UTrack track, UVoicePart part, IEnumerable<UPhoneme> phonemes) {
+            phonemes = phonemes.ToList();
             var uNotes = new List<UNote> { phonemes.First().Parent };
             var endNote = phonemes.Last().Parent;
             while (endNote.Next != null && endNote.Next.Extends != null) {
@@ -433,7 +434,8 @@ namespace OpenUtau.Core.Render {
 
             var curves = new List<Tuple<string, float[]>>();
 
-            foreach(var descriptor in project.expressions.Values) {
+            foreach (var descriptor in track.GetSupportedExps(project)
+                .Where(descriptor => descriptor.type == UExpressionType.Curve)) {
                 if(descriptor.type != UExpressionType.Curve) {
                     continue;
                 }
@@ -442,7 +444,9 @@ namespace OpenUtau.Core.Render {
                 if (!isSupported) {
                     continue;
                 }
-                if (curve == null && descriptor.skipOutputIfDefault && descriptor.defaultValue == 0) {
+                bool hasNoteOverrides = phonemes.Any(phoneme =>
+                    phoneme.GetExpression(project, track, descriptor.abbr).Item2);
+                if (curve == null && descriptor.skipOutputIfDefault && descriptor.defaultValue == 0 && !hasNoteOverrides) {
                     continue;
                 }
                 if (curve == null) {
@@ -453,25 +457,28 @@ namespace OpenUtau.Core.Render {
                     convert = ((x, c) => x == c.descriptor.min ? 0 : (float)MusicMath.DecibelToLinear(x * 0.1));
                 }
                 var curveSampled = SampleCurve(curve, pitchStart, pitches.Length, convert);
+                var curveActive = SampleCurveActivity(curve, pitchStart, pitches.Length);
+                ApplyNoteExpressionOverrides(
+                    project, track, phonemes, descriptor, pitchStart, curveSampled, curveActive);
                 switch (curve.abbr) {
                     case Format.Ustx.PITD: break;
                     case Format.Ustx.DYN : dynamics = curveSampled; break;
                     case Format.Ustx.SHFC: toneShift = curveSampled; break;
                     case Format.Ustx.GENC:
                         gender = curveSampled;
-                        genderCurveActive = SampleCurveActivity(curve, pitchStart, pitches.Length);
+                        genderCurveActive = curveActive;
                         break;
                     case Format.Ustx.TENC:
                         tension = curveSampled;
-                        tensionCurveActive = SampleCurveActivity(curve, pitchStart, pitches.Length);
+                        tensionCurveActive = curveActive;
                         break;
                     case Format.Ustx.BREC:
                         breathiness = curveSampled;
-                        breathinessCurveActive = SampleCurveActivity(curve, pitchStart, pitches.Length);
+                        breathinessCurveActive = curveActive;
                         break;
                     case Format.Ustx.VOIC:
                         voicing = curveSampled;
-                        voicingCurveActive = SampleCurveActivity(curve, pitchStart, pitches.Length);
+                        voicingCurveActive = curveActive;
                         break;
                     default:
                         curves.Add(Tuple.Create(curve.abbr,curveSampled));
@@ -522,6 +529,32 @@ namespace OpenUtau.Core.Render {
                 result[i] = first <= tick && tick <= last;
             }
             return result;
+        }
+
+        private static void ApplyNoteExpressionOverrides(
+            UProject project,
+            UTrack track,
+            IEnumerable<UPhoneme> phonemes,
+            UExpressionDescriptor descriptor,
+            int start,
+            float[] values,
+            bool[] curveActive) {
+            const int interval = 5;
+            foreach (var phoneme in phonemes) {
+                var expression = phoneme.GetExpression(project, track, descriptor.abbr);
+                if (!expression.Item2) {
+                    continue;
+                }
+                int first = Math.Max(0, (int)Math.Ceiling((phoneme.position - start) / (double)interval));
+                int last = Math.Min(values.Length, (int)Math.Ceiling((phoneme.End - start) / (double)interval));
+                for (int i = first; i < last; i++) {
+                    if (curveActive[i]) {
+                        continue;
+                    }
+                    values[i] = Math.Clamp(expression.Item1, descriptor.min, descriptor.max);
+                    curveActive[i] = true;
+                }
+            }
         }
 
         private static float[] SampleCurve(UVoicePart part, string abbr, int start, int length, Func<float, UCurve, float> convert) {

@@ -310,12 +310,6 @@ namespace OpenUtau.Core {
     }
 
     public class SetCurveCommand : ExpCommand {
-        static readonly HashSet<string> hifiUtauNoteCurves = new HashSet<string> {
-            Format.Ustx.GENC,
-            Format.Ustx.BREC,
-            Format.Ustx.TENC,
-            Format.Ustx.VOIC,
-        };
         readonly UProject project;
         readonly string abbr;
         readonly int x;
@@ -345,7 +339,8 @@ namespace OpenUtau.Core {
         public override string ToString() => "Edit Curve";
         public override void Execute() {
             var curve = Part.curves.FirstOrDefault(c => c.abbr == abbr);
-            if (project.expressions.TryGetValue(abbr, out var descriptor)) {
+            var track = project.tracks[Part.trackNo];
+            if (track.TryGetExpDescriptor(project, abbr, out var descriptor)) {
                 if (curve == null) {
                     curve = new UCurve(descriptor);
                     Part.curves.Add(curve);
@@ -358,8 +353,8 @@ namespace OpenUtau.Core {
         }
         void InitializeHiFiUtauNoteBaseline(UCurve curve) {
             var track = project.tracks[Part.trackNo];
-            if (track.RendererSettings.renderer != Renderers.HIFIUTAU ||
-                !hifiUtauNoteCurves.Contains(abbr)) {
+            if (!track.TryGetExpDescriptor(project, abbr, out var descriptor) ||
+                !track.IsHiFiUtauNoteCurve(descriptor)) {
                 return;
             }
             int left = Math.Min(x, lastX);
@@ -443,7 +438,8 @@ namespace OpenUtau.Core {
         public override string ToString() => "Edit Curve";
         public override void Execute() {
             var curve = Part.curves.FirstOrDefault(c => c.abbr == abbr);
-            if (curve == null && project.expressions.TryGetValue(abbr, out var descriptor)) {
+            var track = project.tracks[Part.trackNo];
+            if (curve == null && track.TryGetExpDescriptor(project, abbr, out var descriptor)) {
                 curve = new UCurve(descriptor);
                 Part.curves.Add(curve);
             }
@@ -456,7 +452,8 @@ namespace OpenUtau.Core {
         }
         public override void Unexecute() {
             var curve = Part.curves.FirstOrDefault(c => c.abbr == abbr);
-            if (curve == null && project.expressions.TryGetValue(abbr, out var descriptor)) {
+            var track = project.tracks[Part.trackNo];
+            if (curve == null && track.TryGetExpDescriptor(project, abbr, out var descriptor)) {
                 curve = new UCurve(descriptor);
                 Part.curves.Add(curve);
             }

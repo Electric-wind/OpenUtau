@@ -83,19 +83,6 @@ namespace OpenUtau.App.ViewModels {
         public UVoicePart? Part;
         private HashSet<UNote> selectedNotes = new HashSet<UNote>();
         public List<NotePropertyExpViewModel> Expressions = new List<NotePropertyExpViewModel>();
-        static readonly UExpressionDescriptor[] hifiUtauNoteExpressions = new[] {
-            new UExpressionDescriptor("gender (curve)", Ustx.GENC, -100, 100, 0),
-            new UExpressionDescriptor("breathiness (curve)", Ustx.BREC, -100, 100, 0),
-            new UExpressionDescriptor("tone shift", Ustx.SHFT, -36, 36, 0),
-            new UExpressionDescriptor("tension (curve)", Ustx.TENC, -100, 100, 0),
-            new UExpressionDescriptor("voicing (curve)", Ustx.VOIC, 0, 100, 100),
-        };
-        static readonly HashSet<string> hifiUtauNoteCurves = new HashSet<string> {
-            Ustx.GENC,
-            Ustx.BREC,
-            Ustx.TENC,
-            Ustx.VOIC,
-        };
         public static bool PanelControlPressed { get; set; } = false;
         public static bool NoteLoading { get; set; } = false;
         private static bool AllowNoteEdit { get => PanelControlPressed && !NoteLoading; }
@@ -260,17 +247,17 @@ namespace OpenUtau.App.ViewModels {
         }
 
         IEnumerable<UExpressionDescriptor> GetNotePropertyExpressions(UTrack track) {
-            var descriptors = track.GetSupportedExps(DocManager.Inst.Project)
-                .Where(descriptor => descriptor.type != UExpressionType.Curve)
-                .ToList();
-            if (track.RendererSettings.renderer == Renderers.HIFIUTAU) {
-                foreach (var descriptor in hifiUtauNoteExpressions) {
-                    if (!descriptors.Any(existing => existing.abbr == descriptor.abbr)) {
-                        descriptors.Add(descriptor);
+            var descriptors = track.GetSupportedExps(DocManager.Inst.Project);
+            return descriptors
+                .Where(descriptor => descriptor.type != UExpressionType.Curve || track.IsHiFiUtauNoteCurve(descriptor))
+                .Select(descriptor => {
+                    if (descriptor.type != UExpressionType.Curve) {
+                        return descriptor;
                     }
-                }
-            }
-            return descriptors;
+                    var noteDescriptor = descriptor.Clone();
+                    noteDescriptor.type = UExpressionType.Numerical;
+                    return noteDescriptor;
+                });
         }
 
         private string GetPhonemizerDisplayName(string? targetId) {
@@ -709,7 +696,7 @@ namespace OpenUtau.App.ViewModels {
                 if (descriptor.CustomDefaultValue == value) {
                     value = null;
                 }
-                if (track.RendererSettings.renderer == Renderers.HIFIUTAU && hifiUtauNoteCurves.Contains(abbr)) {
+                if (track.IsHiFiUtauNoteCurve(descriptor)) {
                     float targetValue = value ?? descriptor.CustomDefaultValue;
                     var ranges = selectedNotes.Select(note => {
                         var expression = note.phonemeExpressions.FirstOrDefault(
