@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
+using OpenUtau.Core.Render;
 using OpenUtau.Core.Ustx;
 using OpenUtau.Core.Util;
 
@@ -309,6 +310,12 @@ namespace OpenUtau.Core {
     }
 
     public class SetCurveCommand : ExpCommand {
+        static readonly HashSet<string> hifiUtauNoteCurves = new HashSet<string> {
+            Format.Ustx.GENC,
+            Format.Ustx.BREC,
+            Format.Ustx.TENC,
+            Format.Ustx.VOIC,
+        };
         readonly UProject project;
         readonly string abbr;
         readonly int x;
@@ -343,10 +350,49 @@ namespace OpenUtau.Core {
                     curve = new UCurve(descriptor);
                     Part.curves.Add(curve);
                 }
+                InitializeHiFiUtauNoteBaseline(curve);
                 int y1 = (int)Math.Clamp(y, descriptor.min, descriptor.max);
                 int lastY1 = (int)Math.Clamp(lastY, descriptor.min, descriptor.max);
                 curve.Set(x, y1, lastX, lastY1);
             }
+        }
+        void InitializeHiFiUtauNoteBaseline(UCurve curve) {
+            var track = project.tracks[Part.trackNo];
+            if (track.RendererSettings.renderer != Renderers.HIFIUTAU ||
+                !hifiUtauNoteCurves.Contains(abbr)) {
+                return;
+            }
+            int left = Math.Min(x, lastX);
+            int right = Math.Max(x, lastX);
+            foreach (var phoneme in Part.phonemes.Where(phoneme =>
+                !phoneme.Error && phoneme.position <= right && left < phoneme.End)) {
+                bool curveAlreadyActive = curve.xs.Count > 0 &&
+                    curve.xs[0] < phoneme.End && curve.xs[^1] > phoneme.position;
+                var expression = phoneme.GetExpression(project, track, abbr);
+                if (curveAlreadyActive || !expression.Item2) {
+                    continue;
+                }
+                int start = phoneme.position;
+                int end = phoneme.End;
+                int innerEnd = Math.Max(start, end - UCurve.interval);
+                int leftValue = curve.Sample(start - UCurve.interval);
+                int rightValue = curve.Sample(end);
+                Upsert(curve, start - UCurve.interval, leftValue);
+                int baseline = (int)Math.Round(expression.Item1);
+                Upsert(curve, start, baseline);
+                Upsert(curve, innerEnd, baseline);
+                Upsert(curve, end, rightValue);
+            }
+        }
+        static void Upsert(UCurve curve, int x, int y) {
+            int index = curve.xs.BinarySearch(x);
+            if (index >= 0) {
+                curve.ys[index] = y;
+                return;
+            }
+            index = ~index;
+            curve.xs.Insert(index, x);
+            curve.ys.Insert(index, y);
         }
         public override void Unexecute() {
             var curve = Part.curves.FirstOrDefault(c => c.abbr == abbr);

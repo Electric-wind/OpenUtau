@@ -917,12 +917,25 @@ namespace OpenUtau.App.Views {
                         .ToArray();
                     int start = phonemes.Length > 0 ? phonemes.Min(phoneme => phoneme.position) : note.position;
                     int end = phonemes.Length > 0 ? phonemes.Max(phoneme => phoneme.End) : note.End;
-                    return minResetTick <= start && end <= maxResetTick;
+                    return minResetTick < end && start <= maxResetTick;
                 })
                 .Where(note => !Preferences.Default.LockUnselectedNotesExpressions ||
                     notesVm.Selection.Count == 0 || notesVm.Selection.Contains(note))
                 .Where(note => note.phonemeExpressions.Any(
                     expression => expression.abbr == descriptor.abbr))
+                .Where(note => {
+                    var phonemes = notesVm.Part.phonemes
+                        .Where(phoneme => (phoneme.Parent.Extends ?? phoneme.Parent) == note)
+                        .ToArray();
+                    int start = phonemes.Length > 0 ? phonemes.Min(phoneme => phoneme.position) : note.position;
+                    int end = phonemes.Length > 0 ? phonemes.Max(phoneme => phoneme.End) : note.End;
+                    int innerEnd = Math.Max(start, end - UCurve.interval);
+                    var curve = notesVm.Part.curves.FirstOrDefault(
+                        curve => curve.abbr == descriptor.abbr);
+                    return curve != null && curve.xs.Count > 0 &&
+                        curve.xs[0] <= start && curve.xs[^1] >= end &&
+                        curve.IsEmptyBetween(start, innerEnd, (int)descriptor.defaultValue);
+                })
                 .ToArray();
             if (notes.Length > 0) {
                 DocManager.Inst.ExecuteCmd(new SetNotesSameExpressionCommand(
