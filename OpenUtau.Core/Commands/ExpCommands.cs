@@ -429,6 +429,95 @@ namespace OpenUtau.Core {
         }
     }
 
+    public class ShiftCurveRangeCommand : ExpCommand {
+        readonly string abbr;
+        readonly int[] oldXs;
+        readonly int[] oldYs;
+        readonly int[] newXs;
+        readonly int[] newYs;
+        public bool HasChanges { get; }
+        public override ValidateOptions ValidateOptions
+            => new ValidateOptions {
+                SkipTiming = true,
+                Part = Part,
+                SkipPhonemizer = true,
+                SkipPhoneme = true,
+            };
+
+        public ShiftCurveRangeCommand(
+            UVoicePart part,
+            string abbr,
+            IEnumerable<(int start, int end, float delta)> ranges) : base(part) {
+            this.abbr = abbr;
+            var curve = part.curves.FirstOrDefault(curve => curve.abbr == abbr);
+            oldXs = curve?.xs.ToArray() ?? Array.Empty<int>();
+            oldYs = curve?.ys.ToArray() ?? Array.Empty<int>();
+            var xs = oldXs.ToList();
+            var ys = oldYs.ToList();
+            if (curve != null) {
+                foreach (var (start, end, delta) in ranges.OrderBy(range => range.start)) {
+                    if (Math.Abs(delta) < 0.001f ||
+                        oldXs.Length == 0 || oldXs[0] >= end || oldXs[^1] < start) {
+                        continue;
+                    }
+                    var snapshot = new UCurve(curve.descriptor) {
+                        xs = xs.ToList(),
+                        ys = ys.ToList(),
+                    };
+                    int innerEnd = Math.Max(start, end - UCurve.interval);
+                    var anchors = new[] {
+                        (x: start - UCurve.interval, y: snapshot.Sample(start - UCurve.interval)),
+                        (x: start, y: Shift(snapshot.Sample(start))),
+                        (x: innerEnd, y: Shift(snapshot.Sample(innerEnd))),
+                        (x: end, y: snapshot.Sample(end)),
+                    };
+                    for (int i = 0; i < xs.Count; i++) {
+                        if (start <= xs[i] && xs[i] < end) {
+                            ys[i] = Shift(ys[i]);
+                        }
+                    }
+                    foreach (var anchor in anchors) {
+                        Upsert(xs, ys, anchor.x, anchor.y);
+                    }
+
+                    int Shift(int value) => (int)Math.Round(Math.Clamp(
+                        value + delta, curve.descriptor.min, curve.descriptor.max));
+                }
+            }
+            newXs = xs.ToArray();
+            newYs = ys.ToArray();
+            HasChanges = !oldXs.SequenceEqual(newXs) || !oldYs.SequenceEqual(newYs);
+        }
+
+        public override string ToString() => "Shift Curve";
+
+        public override void Execute() => SetCurve(newXs, newYs);
+
+        public override void Unexecute() => SetCurve(oldXs, oldYs);
+
+        void SetCurve(int[] xs, int[] ys) {
+            var curve = Part.curves.FirstOrDefault(curve => curve.abbr == abbr);
+            if (curve == null) {
+                return;
+            }
+            curve.xs.Clear();
+            curve.xs.AddRange(xs);
+            curve.ys.Clear();
+            curve.ys.AddRange(ys);
+        }
+
+        static void Upsert(List<int> xs, List<int> ys, int x, int y) {
+            int index = xs.BinarySearch(x);
+            if (index >= 0) {
+                ys[index] = y;
+                return;
+            }
+            index = ~index;
+            xs.Insert(index, x);
+            ys.Insert(index, y);
+        }
+    }
+
     public class PasteCurveCommand : ExpCommand {
         readonly UProject project;
         readonly string abbr;

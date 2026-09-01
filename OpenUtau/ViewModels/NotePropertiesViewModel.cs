@@ -90,6 +90,12 @@ namespace OpenUtau.App.ViewModels {
             new UExpressionDescriptor("tension (curve)", Ustx.TENC, -100, 100, 0),
             new UExpressionDescriptor("voicing (curve)", Ustx.VOIC, 0, 100, 100),
         };
+        static readonly HashSet<string> hifiUtauNoteCurves = new HashSet<string> {
+            Ustx.GENC,
+            Ustx.BREC,
+            Ustx.TENC,
+            Ustx.VOIC,
+        };
         public static bool PanelControlPressed { get; set; } = false;
         public static bool NoteLoading { get; set; } = false;
         private static bool AllowNoteEdit { get => PanelControlPressed && !NoteLoading; }
@@ -697,8 +703,29 @@ namespace OpenUtau.App.ViewModels {
         public void SetNumericalExpressionsChanges(string abbr, float? value) {
             if (AllowNoteEdit && Part != null && selectedNotes.Count > 0) {
                 var track = DocManager.Inst.Project.tracks[Part.trackNo];
-                if (track.TryGetExpDescriptor(DocManager.Inst.Project, abbr, out UExpressionDescriptor descriptor) && descriptor.CustomDefaultValue == value) {
+                if (!track.TryGetExpDescriptor(DocManager.Inst.Project, abbr, out UExpressionDescriptor descriptor)) {
+                    return;
+                }
+                if (descriptor.CustomDefaultValue == value) {
                     value = null;
+                }
+                if (track.RendererSettings.renderer == Renderers.HIFIUTAU && hifiUtauNoteCurves.Contains(abbr)) {
+                    float targetValue = value ?? descriptor.CustomDefaultValue;
+                    var ranges = selectedNotes.Select(note => {
+                        var expression = note.phonemeExpressions.FirstOrDefault(
+                            expression => expression.abbr == abbr && expression.index == 0);
+                        float currentValue = expression?.value ?? descriptor.CustomDefaultValue;
+                        var phonemes = Part.phonemes
+                            .Where(phoneme => (phoneme.Parent.Extends ?? phoneme.Parent) == note)
+                            .ToArray();
+                        int start = phonemes.Length > 0 ? phonemes.Min(phoneme => phoneme.position) : note.position;
+                        int end = phonemes.Length > 0 ? phonemes.Max(phoneme => phoneme.End) : note.End;
+                        return (start, end, targetValue - currentValue);
+                    });
+                    var shiftCurve = new ShiftCurveRangeCommand(Part, abbr, ranges);
+                    if (shiftCurve.HasChanges) {
+                        DocManager.Inst.ExecuteCmd(shiftCurve);
+                    }
                 }
                 DocManager.Inst.ExecuteCmd(new SetNotesSameExpressionCommand(DocManager.Inst.Project, track, Part, selectedNotes, abbr, value));
             }

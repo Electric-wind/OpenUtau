@@ -10,6 +10,7 @@ using OpenUtau.App.ViewModels;
 using OpenUtau.Classic;
 using OpenUtau.Core;
 using OpenUtau.Core.Format;
+using OpenUtau.Core.Render;
 using OpenUtau.Core.Ustx;
 using OpenUtau.Core.Util;
 
@@ -818,7 +819,15 @@ namespace OpenUtau.App.Views {
     }
 
     class ExpResetValueState : NoteEditState {
+        static readonly HashSet<string> hifiUtauNoteCurves = new HashSet<string> {
+            Ustx.GENC,
+            Ustx.BREC,
+            Ustx.TENC,
+            Ustx.VOIC,
+        };
         private Point lastPoint;
+        private int minResetTick;
+        private int maxResetTick;
         private UExpressionDescriptor? descriptor;
         private UTrack track;
         public override MouseButton MouseButton => mouseButton;
@@ -841,6 +850,11 @@ namespace OpenUtau.App.Views {
         public override void Begin(IPointer pointer, Point point) {
             base.Begin(pointer, point);
             lastPoint = point;
+            minResetTick = maxResetTick = vm.NotesViewModel.PointToTick(point);
+        }
+        public override void End(IPointer pointer, Point point) {
+            ResetFullyCoveredNoteExpressions();
+            base.End(pointer, point);
         }
         public override void Update(IPointer pointer, Point point) {
             if (descriptor == null) {
@@ -880,10 +894,39 @@ namespace OpenUtau.App.Views {
             var notesVm = vm.NotesViewModel;
             int lastX = notesVm.PointToTick(lastPoint);
             int x = notesVm.PointToTick(point);
+            minResetTick = Math.Min(minResetTick, Math.Min(lastX, x));
+            maxResetTick = Math.Max(maxResetTick, Math.Max(lastX, x));
             if (descriptor != null && notesVm.Part != null) {
                 DocManager.Inst.ExecuteCmd(new SetCurveCommand(
                     notesVm.Project, notesVm.Part, notesVm.PrimaryKey,
                     x, (int)descriptor.defaultValue, lastX, (int)descriptor.defaultValue));
+            }
+        }
+
+        private void ResetFullyCoveredNoteExpressions() {
+            var notesVm = vm.NotesViewModel;
+            if (descriptor == null || notesVm.Part == null ||
+                track.RendererSettings.renderer != Renderers.HIFIUTAU ||
+                !hifiUtauNoteCurves.Contains(descriptor.abbr)) {
+                return;
+            }
+            var notes = notesVm.Part.notes
+                .Where(note => {
+                    var phonemes = notesVm.Part.phonemes
+                        .Where(phoneme => (phoneme.Parent.Extends ?? phoneme.Parent) == note)
+                        .ToArray();
+                    int start = phonemes.Length > 0 ? phonemes.Min(phoneme => phoneme.position) : note.position;
+                    int end = phonemes.Length > 0 ? phonemes.Max(phoneme => phoneme.End) : note.End;
+                    return minResetTick <= start && end <= maxResetTick;
+                })
+                .Where(note => !Preferences.Default.LockUnselectedNotesExpressions ||
+                    notesVm.Selection.Count == 0 || notesVm.Selection.Contains(note))
+                .Where(note => note.phonemeExpressions.Any(
+                    expression => expression.abbr == descriptor.abbr))
+                .ToArray();
+            if (notes.Length > 0) {
+                DocManager.Inst.ExecuteCmd(new SetNotesSameExpressionCommand(
+                    notesVm.Project, track, notesVm.Part, notes, descriptor.abbr, null));
             }
         }
     }
@@ -1301,6 +1344,7 @@ namespace OpenUtau.App.Views {
                 }
             }
         }
+
     }
 
     class DrawPitchState : NoteEditState {
