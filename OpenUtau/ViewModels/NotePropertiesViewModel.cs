@@ -325,9 +325,22 @@ namespace OpenUtau.App.ViewModels {
             if (Expressions.Count > 0) {
                 if (selectedNotes.Count > 0) {
                     var note = selectedNotes.First();
+                    var track = Part != null
+                        ? DocManager.Inst.Project.tracks[Part.trackNo]
+                        : null;
 
                     foreach (NotePropertyExpViewModel exp in Expressions) {
                         exp.IsNoteSelected = true;
+                        if (exp.IsNumerical && track != null &&
+                            track.TryGetExpDescriptor(DocManager.Inst.Project, exp.abbr, out var descriptor) &&
+                            track.IsHiFiUtauNoteCurve(descriptor)) {
+                            var (start, end) = GetNoteExpressionRange(note);
+                            exp.Value = GetEffectiveHiFiUtauValue(note, descriptor, start, end);
+                            exp.HasValue = HasCurveInRange(exp.abbr, start, end) ||
+                                selectedNotes.Any(selectedNote => selectedNote.phonemeExpressions.Any(
+                                    expression => expression.abbr == exp.abbr));
+                            continue;
+                        }
                         var phonemeExpression = note.phonemeExpressions.FirstOrDefault(e => e.abbr == exp.abbr && e.index == 0);
                         if (phonemeExpression != null) {
                             if (exp.IsNumerical) {
@@ -352,10 +365,19 @@ namespace OpenUtau.App.ViewModels {
                     }
                 } else {
                     foreach (NotePropertyExpViewModel exp in Expressions) {
-                        exp.IsNoteSelected = false;
-                        exp.HasValue = false;
+                        bool globalCurve = IsGlobalExpression(exp.abbr);
+                        exp.IsNoteSelected = globalCurve;
+                        var curve = globalCurve ? Part?.curves.FirstOrDefault(c => c.abbr == exp.abbr) : null;
+                        bool hasStoredGlobalValue = globalCurve && Part?.hifiUtauGlobalValues?.ContainsKey(exp.abbr) == true;
+                        exp.HasValue = hasStoredGlobalValue || curve != null && !curve.IsEmpty;
                         if (exp.IsNumerical) {
-                            exp.Value = exp.defaultValue;
+                            var track = Part != null
+                                ? DocManager.Inst.Project.tracks[Part.trackNo]
+                                : null;
+                            exp.Value = globalCurve && Part != null && track != null &&
+                                track.TryGetExpDescriptor(DocManager.Inst.Project, exp.abbr, out var descriptor)
+                                    ? SetGlobalCurveCommand.GetGlobalValue(Part, exp.abbr, descriptor)
+                                    : exp.defaultValue;
                         } else if (exp.IsOptions) {
                             exp.SelectedOption = (int)exp.defaultValue;
                         }
@@ -364,6 +386,72 @@ namespace OpenUtau.App.ViewModels {
             }
         }
 
+        private bool IsGlobalExpression(string abbr) {
+            if (Part == null || Part.notes.Count == 0 || Part.trackNo < 0 || Part.trackNo >= DocManager.Inst.Project.tracks.Count) {
+                return false;
+            }
+            var track = DocManager.Inst.Project.tracks[Part.trackNo];
+            return track.TryGetExpDescriptor(DocManager.Inst.Project, abbr, out var descriptor) &&
+                track.IsHiFiUtauNoteCurve(descriptor);
+        }
+
+        private (int start, int end) GetNoteExpressionRange(UNote note) {
+            if (Part == null) {
+                return (note.position, note.End);
+            }
+            var phonemes = Part.phonemes
+                .Where(phoneme => (phoneme.Parent.Extends ?? phoneme.Parent) == note)
+                .ToArray();
+            return phonemes.Length > 0
+                ? (phonemes.Min(phoneme => phoneme.position), phonemes.Max(phoneme => phoneme.End))
+                : (note.position, note.End);
+        }
+
+        private bool HasCurveInRange(string abbr, int start, int end) {
+            var curve = Part?.curves.FirstOrDefault(curve => curve.abbr == abbr);
+            return curve != null && curve.xs.Count > 0 && curve.xs[0] < end && curve.xs[^1] >= start;
+        }
+
+        private float GetEffectiveHiFiUtauValue(
+            UNote note,
+            UExpressionDescriptor descriptor,
+            int start,
+            int end) {
+            float baseValue = GetHiFiUtauBaseValue(note, descriptor, start, end);
+            float globalOffset = Part != null
+                ? SetGlobalCurveCommand.GetGlobalOffset(Part, descriptor.abbr, descriptor)
+                : 0;
+            return Math.Clamp(baseValue + globalOffset, descriptor.min, descriptor.max);
+        }
+
+        private float GetHiFiUtauBaseValue(
+            UNote note,
+            UExpressionDescriptor descriptor,
+            int start,
+            int end) {
+            var curve = Part?.curves.FirstOrDefault(curve => curve.abbr == descriptor.abbr);
+            if (curve != null && HasCurveInRange(descriptor.abbr, start, end)) {
+                return Math.Clamp(curve.Sample(Math.Max(start, curve.xs[0])), descriptor.min, descriptor.max);
+            }
+            return note.phonemeExpressions
+                .FirstOrDefault(expression => expression.abbr == descriptor.abbr && expression.index == 0)
+                is UExpression expression
+                    ? Math.Clamp(expression.value, descriptor.min, descriptor.max)
+                    : descriptor.CustomDefaultValue;
+        }
+
+        private static bool RefreshesExpressions(UCommand cmd) =>
+            cmd is SetNoteExpressionCommand ||
+            cmd is SetNotesSameExpressionCommand ||
+            cmd is SetPhonemeExpressionCommand ||
+            cmd is ResetExpressionsCommand ||
+            cmd is SetCurveCommand ||
+            cmd is MergedSetCurveCommand ||
+            cmd is ShiftCurveRangeCommand ||
+            cmd is SetGlobalCurveCommand ||
+            cmd is PasteCurveCommand ||
+            cmd is ClearCurveCommand;
+
         #region ICmdSubscriber
         public void OnNext(UCommand cmd, bool isUndo) {
             var note = selectedNotes.FirstOrDefault();
@@ -371,7 +459,16 @@ namespace OpenUtau.App.ViewModels {
                 RefreshPhonemizers();
                 this.RaisePropertyChanged(nameof(PhonemizerOverrideText));
             }
-            if (note == null) { return; }
+            if (cmd is NoteCommand noteCommand && noteCommand.Part == Part &&
+                (cmd is AddNoteCommand || cmd is RemoveNoteCommand)) {
+                AttachExpressions();
+            }
+            if (note == null) {
+                if (RefreshesExpressions(cmd)) {
+                    AttachExpressions();
+                }
+                return;
+            }
 
             if (cmd is NoteCommand) {
                 if (cmd is ChangeNoteLyricCommand) {
@@ -441,7 +538,7 @@ namespace OpenUtau.App.ViewModels {
                     }
                     this.RaisePropertyChanged(nameof(PortamentoLength));
                     this.RaisePropertyChanged(nameof(PortamentoStart));
-                } else if (cmd is SetNoteExpressionCommand || cmd is SetNotesSameExpressionCommand || cmd is SetPhonemeExpressionCommand || cmd is ResetExpressionsCommand) {
+                } else if (RefreshesExpressions(cmd)) {
                     AttachExpressions();
                 }
             } else if (cmd is NotePresetChangedNotification) {
@@ -688,8 +785,19 @@ namespace OpenUtau.App.ViewModels {
             }
         }
         public void SetNumericalExpressionsChanges(string abbr, float? value) {
-            if (AllowNoteEdit && Part != null && selectedNotes.Count > 0) {
-                var track = DocManager.Inst.Project.tracks[Part.trackNo];
+            if (!AllowNoteEdit || Part == null) {
+                return;
+            }
+            var track = DocManager.Inst.Project.tracks[Part.trackNo];
+            if (selectedNotes.Count == 0) {
+                if (track.TryGetExpDescriptor(DocManager.Inst.Project, abbr, out var globalDescriptor) &&
+                    track.IsHiFiUtauNoteCurve(globalDescriptor)) {
+                    DocManager.Inst.ExecuteCmd(new SetGlobalCurveCommand(
+                        DocManager.Inst.Project, Part, abbr, value));
+                }
+                return;
+            }
+            {
                 if (!track.TryGetExpDescriptor(DocManager.Inst.Project, abbr, out UExpressionDescriptor descriptor)) {
                     return;
                 }
@@ -698,23 +806,29 @@ namespace OpenUtau.App.ViewModels {
                 }
                 if (track.IsHiFiUtauNoteCurve(descriptor)) {
                     float targetValue = value ?? descriptor.CustomDefaultValue;
+                    float globalOffset = SetGlobalCurveCommand.GetGlobalOffset(
+                        Part, descriptor.abbr, descriptor);
                     var ranges = selectedNotes.Select(note => {
-                        var expression = note.phonemeExpressions.FirstOrDefault(
-                            expression => expression.abbr == abbr && expression.index == 0);
-                        float currentValue = expression?.value ?? descriptor.CustomDefaultValue;
-                        var phonemes = Part.phonemes
-                            .Where(phoneme => (phoneme.Parent.Extends ?? phoneme.Parent) == note)
-                            .ToArray();
-                        int start = phonemes.Length > 0 ? phonemes.Min(phoneme => phoneme.position) : note.position;
-                        int end = phonemes.Length > 0 ? phonemes.Max(phoneme => phoneme.End) : note.End;
-                        return (start, end, targetValue - currentValue);
+                        var (start, end) = GetNoteExpressionRange(note);
+                        float currentValue = GetHiFiUtauBaseValue(note, descriptor, start, end);
+                        float targetBaseValue = targetValue - globalOffset;
+                        return (start, end, targetBaseValue - currentValue);
                     });
                     var shiftCurve = new ShiftCurveRangeCommand(Part, abbr, ranges);
                     if (shiftCurve.HasChanges) {
                         DocManager.Inst.ExecuteCmd(shiftCurve);
                     }
                 }
-                DocManager.Inst.ExecuteCmd(new SetNotesSameExpressionCommand(DocManager.Inst.Project, track, Part, selectedNotes, abbr, value));
+                float? storedValue = value;
+                if (track.IsHiFiUtauNoteCurve(descriptor) && value.HasValue) {
+                    float globalOffset = SetGlobalCurveCommand.GetGlobalOffset(
+                        Part, descriptor.abbr, descriptor);
+                    if (Math.Abs(globalOffset) > 0.001f) {
+                        storedValue = value.Value - globalOffset;
+                    }
+                }
+                DocManager.Inst.ExecuteCmd(new SetNotesSameExpressionCommand(
+                    DocManager.Inst.Project, track, Part, selectedNotes, abbr, storedValue));
             }
         }
         public void SetOptionalExpressionsChanges(string abbr, int? value) {

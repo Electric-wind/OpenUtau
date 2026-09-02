@@ -446,7 +446,9 @@ namespace OpenUtau.Core.Render {
                 }
                 bool hasNoteOverrides = phonemes.Any(phoneme =>
                     phoneme.GetExpression(project, track, descriptor.abbr).Item2);
-                if (curve == null && descriptor.skipOutputIfDefault && descriptor.defaultValue == 0 && !hasNoteOverrides) {
+                bool hasGlobalValue = part.hifiUtauGlobalValues?.ContainsKey(descriptor.abbr) == true;
+                if (curve == null && descriptor.skipOutputIfDefault && descriptor.defaultValue == 0 &&
+                    !hasNoteOverrides && !hasGlobalValue) {
                     continue;
                 }
                 if (curve == null) {
@@ -458,8 +460,19 @@ namespace OpenUtau.Core.Render {
                 }
                 var curveSampled = SampleCurve(curve, pitchStart, pitches.Length, convert);
                 var curveActive = SampleCurveActivity(curve, pitchStart, pitches.Length);
+                float globalOffset = track.IsHiFiUtauNoteCurve(descriptor)
+                    ? SetGlobalCurveCommand.GetGlobalOffset(part, descriptor.abbr, descriptor)
+                    : 0;
+                if (Math.Abs(globalOffset) > 0.001f) {
+                    for (int i = 0; i < curveSampled.Length; i++) {
+                        curveSampled[i] = Math.Clamp(
+                            curveSampled[i] + globalOffset,
+                            descriptor.min,
+                            descriptor.max);
+                    }
+                }
                 ApplyNoteExpressionOverrides(
-                    project, track, phonemes, descriptor, pitchStart, curveSampled, curveActive);
+                    project, track, phonemes, descriptor, pitchStart, curveSampled, curveActive, globalOffset);
                 switch (curve.abbr) {
                     case Format.Ustx.PITD: break;
                     case Format.Ustx.DYN : dynamics = curveSampled; break;
@@ -538,7 +551,8 @@ namespace OpenUtau.Core.Render {
             UExpressionDescriptor descriptor,
             int start,
             float[] values,
-            bool[] curveActive) {
+            bool[] curveActive,
+            float globalOffset = 0) {
             const int interval = 5;
             foreach (var phoneme in phonemes) {
                 var expression = phoneme.GetExpression(project, track, descriptor.abbr);
@@ -551,7 +565,10 @@ namespace OpenUtau.Core.Render {
                     if (curveActive[i]) {
                         continue;
                     }
-                    values[i] = Math.Clamp(expression.Item1, descriptor.min, descriptor.max);
+                    values[i] = Math.Clamp(
+                        expression.Item1 + globalOffset,
+                        descriptor.min,
+                        descriptor.max);
                     curveActive[i] = true;
                 }
             }

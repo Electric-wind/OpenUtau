@@ -323,12 +323,14 @@ namespace OpenUtau.App.Controls {
             if (!track.IsHiFiUtauNoteCurve(descriptor)) {
                 return false;
             }
+            float globalOffset = SetGlobalCurveCommand.GetGlobalOffset(
+                Part!, descriptor.abbr, descriptor);
             var overrides = Part!.phonemes
                 .Where(phoneme => !phoneme.Error && phoneme.Parent != null)
                 .Select(phoneme => (phoneme, expression: phoneme.GetExpression(project, track, descriptor.abbr)))
                 .Where(item => item.expression.Item2)
                 .ToList();
-            if (overrides.Count == 0) {
+            if (overrides.Count == 0 && Math.Abs(globalOffset) < 0.001f) {
                 return false;
             }
 
@@ -373,12 +375,18 @@ namespace OpenUtau.App.Controls {
                 foreach (var item in overrides) {
                     if (item.phoneme.position <= tick && tick < item.phoneme.End) {
                         if (!HasDrawnCurveAt(tick)) {
-                            return item.expression.Item1;
+                            return Math.Clamp(
+                                item.expression.Item1 + globalOffset,
+                                descriptor.min,
+                                descriptor.max);
                         }
                         break;
                     }
                 }
-                return SampleCurve(tick);
+                return Math.Clamp(
+                    SampleCurve(tick) + globalOffset,
+                    descriptor.min,
+                    descriptor.max);
             }
 
             bool HasDrawnCurveAt(int tick) =>
