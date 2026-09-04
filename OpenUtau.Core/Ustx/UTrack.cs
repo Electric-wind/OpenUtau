@@ -139,13 +139,23 @@ namespace OpenUtau.Core.Ustx {
                 return list;
             }
             var exps = project.expressions.Keys.ToList();
-            exps.Union(TrackExpressions.Select(exp => exp.abbr));
+            exps.AddRange(TrackExpressions
+                .Select(exp => exp.abbr)
+                .Where(abbr => !exps.Contains(abbr)));
             foreach (var abbr in exps) {
                 if (TryGetExpDescriptor(project, abbr, out var descriptor) && RendererSettings.Renderer.SupportsExpression(descriptor)) {
                     list.Add(descriptor);
                 }
             }
             return list;
+        }
+
+        public bool IsHiFiUtauNoteCurve(UExpressionDescriptor descriptor) {
+            return RendererSettings.renderer == Renderers.HIFIUTAU &&
+                descriptor.type == UExpressionType.Curve &&
+                descriptor.abbr != Format.Ustx.DYN &&
+                descriptor.abbr != Format.Ustx.PITD &&
+                descriptor.abbr != Format.Ustx.SHFC;
         }
 
         public void OnSingerRefreshed() {
