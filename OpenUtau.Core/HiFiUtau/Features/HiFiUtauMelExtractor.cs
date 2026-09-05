@@ -44,7 +44,9 @@ namespace OpenUtau.Core.HiFiUtau {
                     for (int i = 0; i < weights.Length; i++) {
                         sum += weights[i] * mag[band.Start + i];
                     }
-                    result[m, t] = (float)Math.Log(Math.Max(sum, 1e-5));
+                    // Match Hifisampler's dynamic_range_compression_torch clip_val.
+                    // A higher floor turns silence into an audible decoder noise floor.
+                    result[m, t] = (float)Math.Log(Math.Max(sum, 1e-9));
                 }
             }
             return result;
