@@ -69,6 +69,10 @@ namespace OpenUtau.Core.Render {
         public readonly float volume;
         public readonly float velocity;
         public readonly float modulation;
+        public readonly float gender;
+        public readonly float breathiness;
+        public readonly float tension;
+        public readonly float voicing;
         public readonly bool direct;
         public readonly Vector2[] envelope;
 
@@ -123,6 +127,10 @@ namespace OpenUtau.Core.Render {
             volume = phoneme.GetExpression(project, track, Format.Ustx.VOL).Item1 * 0.01f;
             velocity = phoneme.GetExpression(project, track, Format.Ustx.VEL).Item1 * 0.01f;
             modulation = phoneme.GetExpression(project, track, Format.Ustx.MOD).Item1 * 0.01f;
+            gender = phoneme.GetExpression(project, track, Format.Ustx.GENC).Item1;
+            breathiness = phoneme.GetExpression(project, track, Format.Ustx.BREC).Item1;
+            tension = phoneme.GetExpression(project, track, Format.Ustx.TENC).Item1;
+            voicing = phoneme.GetExpression(project, track, Format.Ustx.VOIC).Item1;
             leadingMs = phoneme.preutter;
             envelope = phoneme.envelope.data.ToArray();
             direct = phoneme.GetExpression(project, track, Format.Ustx.DIR).Item1 == 1;
@@ -150,6 +158,10 @@ namespace OpenUtau.Core.Render {
                     writer.Write(volume);
                     writer.Write(velocity);
                     writer.Write(modulation);
+                    writer.Write(gender);
+                    writer.Write(breathiness);
+                    writer.Write(tension);
+                    writer.Write(voicing);
                     writer.Write(direct);
                     writer.Write(leadingMs);
                     foreach (var point in envelope) {
@@ -183,10 +195,14 @@ namespace OpenUtau.Core.Render {
         public readonly float[] pitchesBeforeDeviation;
         public readonly float[] dynamics;
         public readonly float[] gender;
+        public readonly bool[] genderCurveActive = Array.Empty<bool>();
         public readonly float[] breathiness;
+        public readonly bool[] breathinessCurveActive = Array.Empty<bool>();
         public readonly float[] toneShift;
         public readonly float[] tension;
+        public readonly bool[] tensionCurveActive = Array.Empty<bool>();
         public readonly float[] voicing;
+        public readonly bool[] voicingCurveActive = Array.Empty<bool>();
         public readonly Tuple<string, float[]>[] curves;//custom curves defined by renderer
         public readonly ulong preEffectHash;
         public readonly ulong hash;
@@ -197,6 +213,7 @@ namespace OpenUtau.Core.Render {
         private List<string> cacheFiles = new List<string>();
 
         internal RenderPhrase(UProject project, UTrack track, UVoicePart part, IEnumerable<UPhoneme> phonemes) {
+            phonemes = phonemes.ToList();
             var uNotes = new List<UNote> { phonemes.First().Parent };
             var endNote = phonemes.Last().Parent;
             while (endNote.Next != null && endNote.Next.Extends != null) {
@@ -417,7 +434,8 @@ namespace OpenUtau.Core.Render {
 
             var curves = new List<Tuple<string, float[]>>();
 
-            foreach(var descriptor in project.expressions.Values) {
+            foreach (var descriptor in track.GetSupportedExps(project)
+                .Where(descriptor => descriptor.type == UExpressionType.Curve)) {
                 if(descriptor.type != UExpressionType.Curve) {
                     continue;
                 }
@@ -426,7 +444,11 @@ namespace OpenUtau.Core.Render {
                 if (!isSupported) {
                     continue;
                 }
-                if (curve == null && descriptor.skipOutputIfDefault && descriptor.defaultValue == 0) {
+                bool hasNoteOverrides = phonemes.Any(phoneme =>
+                    phoneme.GetExpression(project, track, descriptor.abbr).Item2);
+                bool hasGlobalValue = part.hifiUtauGlobalValues?.ContainsKey(descriptor.abbr) == true;
+                if (curve == null && descriptor.skipOutputIfDefault && descriptor.defaultValue == 0 &&
+                    !hasNoteOverrides && !hasGlobalValue) {
                     continue;
                 }
                 if (curve == null) {
@@ -437,14 +459,40 @@ namespace OpenUtau.Core.Render {
                     convert = ((x, c) => x == c.descriptor.min ? 0 : (float)MusicMath.DecibelToLinear(x * 0.1));
                 }
                 var curveSampled = SampleCurve(curve, pitchStart, pitches.Length, convert);
+                var curveActive = SampleCurveActivity(curve, pitchStart, pitches.Length);
+                float globalOffset = track.IsHiFiUtauNoteCurve(descriptor)
+                    ? SetGlobalCurveCommand.GetGlobalOffset(part, descriptor.abbr, descriptor)
+                    : 0;
+                if (Math.Abs(globalOffset) > 0.001f) {
+                    for (int i = 0; i < curveSampled.Length; i++) {
+                        curveSampled[i] = Math.Clamp(
+                            curveSampled[i] + globalOffset,
+                            descriptor.min,
+                            descriptor.max);
+                    }
+                }
+                ApplyNoteExpressionOverrides(
+                    project, track, phonemes, descriptor, pitchStart, curveSampled, curveActive, globalOffset);
                 switch (curve.abbr) {
                     case Format.Ustx.PITD: break;
                     case Format.Ustx.DYN : dynamics = curveSampled; break;
                     case Format.Ustx.SHFC: toneShift = curveSampled; break;
-                    case Format.Ustx.GENC: gender = curveSampled; break;
-                    case Format.Ustx.TENC: tension = curveSampled; break;
-                    case Format.Ustx.BREC: breathiness = curveSampled; break;
-                    case Format.Ustx.VOIC: voicing = curveSampled; break;
+                    case Format.Ustx.GENC:
+                        gender = curveSampled;
+                        genderCurveActive = curveActive;
+                        break;
+                    case Format.Ustx.TENC:
+                        tension = curveSampled;
+                        tensionCurveActive = curveActive;
+                        break;
+                    case Format.Ustx.BREC:
+                        breathiness = curveSampled;
+                        breathinessCurveActive = curveActive;
+                        break;
+                    case Format.Ustx.VOIC:
+                        voicing = curveSampled;
+                        voicingCurveActive = curveActive;
+                        break;
                     default:
                         curves.Add(Tuple.Create(curve.abbr,curveSampled));
                         break;
@@ -482,6 +530,50 @@ namespace OpenUtau.Core.Render {
             return result;
         }
 
+        private static bool[] SampleCurveActivity(UCurve curve, int start, int length) {
+            var result = new bool[length];
+            if (curve.xs == null || curve.xs.Count == 0) {
+                return result;
+            }
+            int first = curve.xs[0];
+            int last = curve.xs[^1];
+            for (int i = 0; i < length; i++) {
+                int tick = start + i * UCurve.interval;
+                result[i] = first <= tick && tick <= last;
+            }
+            return result;
+        }
+
+        private static void ApplyNoteExpressionOverrides(
+            UProject project,
+            UTrack track,
+            IEnumerable<UPhoneme> phonemes,
+            UExpressionDescriptor descriptor,
+            int start,
+            float[] values,
+            bool[] curveActive,
+            float globalOffset = 0) {
+            const int interval = 5;
+            foreach (var phoneme in phonemes) {
+                var expression = phoneme.GetExpression(project, track, descriptor.abbr);
+                if (!expression.Item2) {
+                    continue;
+                }
+                int first = Math.Max(0, (int)Math.Ceiling((phoneme.position - start) / (double)interval));
+                int last = Math.Min(values.Length, (int)Math.Ceiling((phoneme.End - start) / (double)interval));
+                for (int i = first; i < last; i++) {
+                    if (curveActive[i]) {
+                        continue;
+                    }
+                    values[i] = Math.Clamp(
+                        expression.Item1 + globalOffset,
+                        descriptor.min,
+                        descriptor.max);
+                    curveActive[i] = true;
+                }
+            }
+        }
+
         private static float[] SampleCurve(UVoicePart part, string abbr, int start, int length, Func<float, UCurve, float> convert) {
             var curve = part.curves.FirstOrDefault(c => c.abbr == abbr);
             if (curve == null) {
@@ -508,6 +600,11 @@ namespace OpenUtau.Core.Render {
                                 foreach (var v in array) {
                                     writer.Write(v);
                                 }
+                            }
+                        }
+                        foreach (var active in new bool[][] { genderCurveActive, breathinessCurveActive, tensionCurveActive, voicingCurveActive }) {
+                            foreach (var value in active) {
+                                writer.Write(value);
                             }
                         }
                         foreach(var curve in curves) {

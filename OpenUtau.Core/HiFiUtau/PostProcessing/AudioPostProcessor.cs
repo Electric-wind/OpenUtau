@@ -15,20 +15,27 @@ namespace OpenUtau.Core.HiFiUtau {
         static readonly object separatorLock = new object();
         static readonly Dictionary<string, HnsepSeparator> separators = new Dictionary<string, HnsepSeparator>();
 
-        public static void Apply(RenderPhrase phrase, RenderResult result) {
+        public static void Apply(
+            RenderPhrase phrase,
+            RenderResult result,
+            float[]? breathinessCurve = null,
+            float[]? tensionCurve = null,
+            float[]? voicingCurve = null) {
             if (result.samples == null || result.samples.Length == 0) {
                 return;
             }
 
-            ApplyHnsepCurves(phrase, result.samples);
+            ApplyHnsepCurves(phrase, result.samples, breathinessCurve, tensionCurve, voicingCurve);
         }
 
         public static void ApplyWithSeparated(RenderPhrase phrase, RenderResult result, float[] harmonic, float[] noise,
-            float[]? brelCurve = null, float[]? brehCurve = null, float[]? briCurve = null) {
+            float[]? brelCurve = null, float[]? brehCurve = null, float[]? briCurve = null,
+            float[]? breathinessCurve = null, float[]? tensionCurve = null, float[]? voicingCurve = null) {
             if (result.samples == null || result.samples.Length == 0) {
                 return;
             }
-            ApplyHnsepCurvesWithSeparated(phrase, result.samples, harmonic, noise, brelCurve, brehCurve, briCurve);
+            ApplyHnsepCurvesWithSeparated(phrase, result.samples, harmonic, noise, brelCurve, brehCurve, briCurve,
+                breathinessCurve, tensionCurve, voicingCurve);
         }
 
         public static void ApplyGrowl(float[] samples, float[]? growlCurve, int sampleRate, float[]? pitchHzCurve = null) {
@@ -90,10 +97,18 @@ namespace OpenUtau.Core.HiFiUtau {
             Array.Copy(output, samples, nSamples);
         }
 
-        static void ApplyHnsepCurves(RenderPhrase phrase, float[] samples) {
-            bool needBreath = HasNonDefaultCurve(phrase.breathiness, 0, 0.5f);
-            bool needTension = HasNonDefaultCurve(phrase.tension, 0, 0.5f);
-            bool needVoicing = HasNonDefaultCurve(phrase.voicing, 100, 0.5f);
+        static void ApplyHnsepCurves(
+            RenderPhrase phrase,
+            float[] samples,
+            float[]? breathinessCurve,
+            float[]? tensionCurve,
+            float[]? voicingCurve) {
+            breathinessCurve ??= phrase.breathiness;
+            tensionCurve ??= phrase.tension;
+            voicingCurve ??= phrase.voicing;
+            bool needBreath = HasNonDefaultCurve(breathinessCurve, 0, 0.5f);
+            bool needTension = HasNonDefaultCurve(tensionCurve, 0, 0.5f);
+            bool needVoicing = HasNonDefaultCurve(voicingCurve, 100, 0.5f);
             if (!needBreath && !needTension && !needVoicing) {
                 return;
             }
@@ -106,14 +121,19 @@ namespace OpenUtau.Core.HiFiUtau {
                 return;
             }
 
-            ApplyCurvesToComponents(phrase, samples, harmonic, noise, needBreath, needTension, needVoicing, length);
+            ApplyCurvesToComponents(phrase, samples, harmonic, noise, needBreath, needTension, needVoicing, length,
+                null, null, null, breathinessCurve, tensionCurve, voicingCurve);
         }
 
         static void ApplyHnsepCurvesWithSeparated(RenderPhrase phrase, float[] samples, float[] harmonic, float[] noise,
-            float[]? brelCurve = null, float[]? brehCurve = null, float[]? briCurve = null) {
-            bool needBreath = HasNonDefaultCurve(phrase.breathiness, 0, 0.5f);
-            bool needTension = HasNonDefaultCurve(phrase.tension, 0, 0.5f);
-            bool needVoicing = HasNonDefaultCurve(phrase.voicing, 100, 0.5f);
+            float[]? brelCurve = null, float[]? brehCurve = null, float[]? briCurve = null,
+            float[]? breathinessCurve = null, float[]? tensionCurve = null, float[]? voicingCurve = null) {
+            breathinessCurve ??= phrase.breathiness;
+            tensionCurve ??= phrase.tension;
+            voicingCurve ??= phrase.voicing;
+            bool needBreath = HasNonDefaultCurve(breathinessCurve, 0, 0.5f);
+            bool needTension = HasNonDefaultCurve(tensionCurve, 0, 0.5f);
+            bool needVoicing = HasNonDefaultCurve(voicingCurve, 100, 0.5f);
             bool needBrel = HasNonDefaultCurve(brelCurve, 0, 0.5f);
             bool needBreh = HasNonDefaultCurve(brehCurve, 0, 0.5f);
             bool needBri = HasNonDefaultCurve(briCurve, 0, 0.5f);
@@ -126,20 +146,22 @@ namespace OpenUtau.Core.HiFiUtau {
                 return;
             }
 
-            ApplyCurvesToComponents(phrase, samples, harmonic, noise, needBreath, needTension, needVoicing, length, brelCurve, brehCurve, briCurve);
+            ApplyCurvesToComponents(phrase, samples, harmonic, noise, needBreath, needTension, needVoicing, length,
+                brelCurve, brehCurve, briCurve, breathinessCurve, tensionCurve, voicingCurve);
         }
 
         static void ApplyCurvesToComponents(RenderPhrase phrase, float[] samples, float[] harmonic, float[] noise,
             bool needBreath, bool needTension, bool needVoicing, int length,
-            float[]? brelCurve = null, float[]? brehCurve = null, float[]? briCurve = null) {
+            float[]? brelCurve = null, float[]? brehCurve = null, float[]? briCurve = null,
+            float[]? breathinessCurve = null, float[]? tensionCurve = null, float[]? voicingCurve = null) {
             if (needBreath) {
-                ApplyBreath(noise, phrase.breathiness, length);
+                ApplyBreath(noise, breathinessCurve, length);
             }
             if (needVoicing) {
-                ApplyVoicing(harmonic, phrase.voicing, length);
+                ApplyVoicing(harmonic, voicingCurve, length);
             }
             if (needTension) {
-                harmonic = ApplyTension(harmonic, phrase.tension, phrase);
+                harmonic = ApplyTension(harmonic, tensionCurve, phrase);
                 length = Math.Min(length, harmonic.Length);
             }
             bool hasBrel = HasNonDefaultCurve(brelCurve, 0, 0.5f);
