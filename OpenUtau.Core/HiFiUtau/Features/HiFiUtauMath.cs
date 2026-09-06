@@ -88,7 +88,8 @@ namespace OpenUtau.Core.HiFiUtau {
 
         public static float[,] CreateBlankMel(int bins, int frames) {
             var result = new float[bins, frames];
-            float blank = (float)Math.Log(1e-5);
+            // Keep blank frames at the same mel floor as Hifisampler.
+            float blank = (float)Math.Log(1e-9);
             for (int b = 0; b < bins; b++) {
                 for (int t = 0; t < frames; t++) {
                     result[b, t] = blank;
