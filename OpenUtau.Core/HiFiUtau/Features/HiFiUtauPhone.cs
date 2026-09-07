@@ -37,8 +37,22 @@ namespace OpenUtau.Core.HiFiUtau {
         public float[]? Gender;
         public float[,]? Mel;
 
-        public static HiFiUtauPhone[] CreateAll(RenderPhrase phrase) {
-            return phrase.phones.Select(phone => new HiFiUtauPhone {
+        public HiFiUtauPhone WithTiming(HiFiUtauPhone target, float ratio) {
+            var phone = (HiFiUtauPhone)MemberwiseClone();
+            phone.Envelope = new Vector2[Envelope.Length];
+            for (int i = 0; i < Envelope.Length; i++) {
+                phone.Envelope[i] = Vector2.Lerp(Envelope[i], target.Envelope[i], ratio);
+            }
+            phone.LeadingMs = -phone.Envelope[0].X;
+            phone.OverlapMs = OverlapMs + (target.OverlapMs - OverlapMs) * ratio;
+            phone.DurationMs = phone.Envelope[4].X;
+            return phone;
+        }
+
+        public static HiFiUtauPhone[] CreateAll(RenderPhrase phrase) => CreateAll(phrase.phones);
+
+        public static HiFiUtauPhone[] CreateAll(RenderPhone[] phones) {
+            return phones.Select(phone => new HiFiUtauPhone {
                 Phoneme = phone.phoneme,
                 AudioPath = phone.oto?.File ?? string.Empty,
                 OffsetMs = phone.oto?.Offset ?? 0,

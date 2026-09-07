@@ -80,9 +80,10 @@ namespace OpenUtau.Core.Render {
         public readonly int toneShift;
 
         public readonly UOto oto;
+        public readonly UOto oto2;
         public readonly ulong hash;
 
-        internal RenderPhone(UProject project, UTrack track, UVoicePart part, UNote note, UPhoneme phoneme, int phrasePosition) {
+        internal RenderPhone(UProject project, UTrack track, UVoicePart part, UNote note, UPhoneme phoneme, int phrasePosition, bool xsyAvailable = false) {
             position = part.position + phoneme.position - phrasePosition;
             duration = phoneme.Duration;
             end = position + duration;
@@ -137,6 +138,14 @@ namespace OpenUtau.Core.Render {
             toneShift = (int)phoneme.GetExpression(project, track, Format.Ustx.SHFT).Item1;
 
             oto = phoneme.oto;
+            string targetColor = xsyAvailable ? phoneme.GetVoiceColor2(project, track) : null;
+            if (oto != null && targetColor != null) {
+                string basePhoneme = oto.Phonetic ?? phoneme.phoneme;
+                if (track.Singer.TryGetMappedOto(basePhoneme, note.tone, targetColor, out var secondaryOto) &&
+                    secondaryOto.IsColorMatch(targetColor)) {
+                    oto2 = secondaryOto;
+                }
+            }
             hash = Hash();
         }
         private ulong Hash() {
@@ -155,6 +164,16 @@ namespace OpenUtau.Core.Render {
                         }
                     }
                     writer.Write(suffix);
+                    if (oto2 != null) {
+                        writer.Write(oto2.File ?? string.Empty);
+                        writer.Write(oto2.Alias ?? string.Empty);
+                        writer.Write(oto2.Offset);
+                        writer.Write(oto2.Consonant);
+                        writer.Write(oto2.Cutoff);
+                        writer.Write(oto2.Preutter);
+                        writer.Write(oto2.Overlap);
+                        writer.Write(File.Exists(oto2.File) ? File.GetLastWriteTimeUtc(oto2.File).Ticks : 0L);
+                    }
                     writer.Write(volume);
                     writer.Write(velocity);
                     writer.Write(modulation);
@@ -190,6 +209,7 @@ namespace OpenUtau.Core.Render {
 
         public readonly RenderNote[] notes;
         public readonly RenderPhone[] phones;
+        public readonly RenderPhone[]? secondaryPhones;
 
         public readonly float[] pitches;
         public readonly float[] pitchesBeforeDeviation;
@@ -202,6 +222,7 @@ namespace OpenUtau.Core.Render {
         public readonly float[] tension;
         public readonly bool[] tensionCurveActive = Array.Empty<bool>();
         public readonly float[] voicing;
+        public readonly float[] xsy;
         public readonly bool[] voicingCurveActive = Array.Empty<bool>();
         public readonly Tuple<string, float[]>[] curves;//custom curves defined by renderer
         public readonly ulong preEffectHash;
@@ -247,16 +268,29 @@ namespace OpenUtau.Core.Render {
             notes = uNotes
                 .Select(n => new RenderNote(project, part, n, position))
                 .ToArray();
+            bool xsyAvailable = renderer is HiFiUtau.HiFiUtauRenderer &&
+                (part.curves.Any(c => c.abbr == Format.Ustx.XSY) ||
+                    part.hifiUtauGlobalValues?.ContainsKey(Format.Ustx.XSY) == true ||
+                    phonemes.Any(p => p.GetExpression(project, track, Format.Ustx.XSY).Item1 > 0));
             phones = phonemes
-                .Select(p => new RenderPhone(project, track, part, p.Parent, p, position))
+                .Select(p => new RenderPhone(project, track, part, p.Parent, p, position, xsyAvailable))
                 .ToArray();
 
-            leading = phones.First().leading;
+            if (xsyAvailable) {
+                var secondaryOtos = phones.Select(p => !p.direct && p.oto2 != null && File.Exists(p.oto2.File)
+                    ? p.oto2 : p.oto).ToArray();
+                if (secondaryOtos.Where((oto, i) => oto != phones[i].oto).Any()) {
+                    secondaryPhones = UPhoneme.CreateRenderCopies(phonemes.ToArray(), secondaryOtos, project, track, part)
+                        .Select(p => new RenderPhone(project, track, part, p.Parent, p, position))
+                        .ToArray();
+                }
+            }
+            leading = Math.Max(phones.First().leading, secondaryPhones?.First().leading ?? 0);
 
             positionMs = phones.First().positionMs;
             endMs = phones.Last().endMs;
             durationMs = endMs - positionMs;
-            leadingMs = phones.First().leadingMs;
+            leadingMs = Math.Max(phones.First().leadingMs, secondaryPhones?.First().leadingMs ?? 0);
 
             const int pitchInterval = 5;
             int pitchStart = position - part.position - leading;
@@ -493,6 +527,9 @@ namespace OpenUtau.Core.Render {
                         voicing = curveSampled;
                         voicingCurveActive = curveActive;
                         break;
+                    case Format.Ustx.XSY:
+                        xsy = curveSampled;
+                        break;
                     default:
                         curves.Add(Tuple.Create(curve.abbr,curveSampled));
                         break;
@@ -592,8 +629,13 @@ namespace OpenUtau.Core.Render {
                     foreach (var phone in phones) {
                         writer.Write(phone.hash);
                     }
+                    if (secondaryPhones != null) {
+                        foreach (var phone in secondaryPhones) {
+                            writer.Write(phone.hash);
+                        }
+                    }
                     if (postEffect) {
-                        foreach (var array in new float[][] { pitches, dynamics, gender, breathiness, toneShift, tension, voicing }) {
+                        foreach (var array in new float[][] { pitches, dynamics, gender, breathiness, toneShift, tension, voicing, xsy }) {
                             if (array == null) {
                                 writer.Write("null");
                             } else {
