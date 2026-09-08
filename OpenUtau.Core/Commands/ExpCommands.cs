@@ -528,8 +528,10 @@ namespace OpenUtau.Core {
                         Upsert(xs, ys, anchor.x, anchor.y);
                     }
 
-                    int Shift(int value) => (int)Math.Round(Math.Clamp(
-                        value + delta, curve.descriptor.min, curve.descriptor.max));
+                    // Keep the shifted curve unbounded internally. The descriptor range is
+                    // applied only when the effective value is displayed or rendered, so
+                    // moving a note to a limit does not destroy its original shape.
+                    int Shift(int value) => (int)Math.Round(value + delta);
                 }
             }
             newXs = xs.ToArray();

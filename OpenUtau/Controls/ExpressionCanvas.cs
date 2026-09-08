@@ -164,7 +164,8 @@ namespace OpenUtau.App.Controls {
 
                 curveSelection.GetWholeCurveAndSelection(descriptor.abbr, curve, out List<int> xs, out List<int> ys);
                 bool drewEffectiveCurve = DrawHiFiUtauEffectiveCurve(
-                    context, viewModel, project, track, descriptor, xs, ys, leftTick, rightTick, defaultHeight);
+                    context, viewModel, project, track, descriptor, xs, ys, leftTick, rightTick, defaultHeight,
+                    lPen, lPen2, lPenSelected, lPen2Selected, brush);
                 if (curve == null) {
                     if (!drewEffectiveCurve) {
                         xs.Insert(0, (int)leftTick);
@@ -400,7 +401,12 @@ namespace OpenUtau.App.Controls {
             List<int> curveYs,
             double leftTick,
             double rightTick,
-            double defaultHeight) {
+            double defaultHeight,
+            IPen linePen,
+            IPen curvePen,
+            IPen selectedLinePen,
+            IPen selectedCurvePen,
+            IBrush fillBrush) {
             if (!track.IsHiFiUtauNoteCurve(descriptor)) {
                 return false;
             }
@@ -431,6 +437,19 @@ namespace OpenUtau.App.Controls {
                 .ToList();
             var values = ticks.Select(GetEffectiveValue).ToList();
 
+            var fillGeometry = new PathGeometry();
+            var fillFigure = new PathFigure {
+                IsClosed = true,
+                StartPoint = new Point(
+                    viewModel.TickToneToPoint(ticks[0], 0).X,
+                    defaultHeight),
+            };
+            fillFigure.Segments!.Add(new LineSegment {
+                Point = new Point(viewModel.TickToneToPoint(ticks[0], 0).X,
+                    ValueToY(values[0])),
+                IsStroked = false,
+            });
+
             for (int i = 0; i < ticks.Count - 1; i++) {
                 int tick1 = ticks[i];
                 int tick2 = ticks[i + 1];
@@ -442,15 +461,30 @@ namespace OpenUtau.App.Controls {
                     (value1 - descriptor.defaultValue) / (descriptor.max - descriptor.min);
                 double y2 = defaultHeight - Bounds.Height *
                     (value2 - descriptor.defaultValue) / (descriptor.max - descriptor.min);
+                fillFigure.Segments!.Add(new LineSegment {
+                    Point = new Point(x2, y2),
+                    IsStroked = false,
+                });
                 bool selected = curveSelection.HasValue(descriptor.abbr) &&
                     curveSelection.StartPoint.x <= tick1 && tick2 <= curveSelection.EndPoint.x;
                 bool isDefault = value1 == descriptor.defaultValue && value2 == descriptor.defaultValue;
                 IPen pen = selected
-                    ? isDefault ? ThemeManager.AccentPen2 : ThemeManager.AccentPen2Thickness2
-                    : isDefault ? ThemeManager.AccentPen1 : ThemeManager.AccentPen1Thickness2;
+                    ? isDefault ? selectedLinePen : selectedCurvePen
+                    : isDefault ? linePen : curvePen;
                 context.DrawLine(pen, new Point(x1, y1), new Point(x2, y2));
             }
+            fillFigure.Segments!.Add(new LineSegment {
+                Point = new Point(viewModel.TickToneToPoint(ticks[^1], 0).X, defaultHeight),
+                IsStroked = false,
+            });
+            fillGeometry.Figures!.Add(fillFigure);
+            using (var state = context.PushOpacity(0.2)) {
+                context.DrawGeometry(fillBrush, null, fillGeometry);
+            }
             return true;
+
+            double ValueToY(float value) => defaultHeight - Bounds.Height *
+                (value - descriptor.defaultValue) / (descriptor.max - descriptor.min);
 
             float GetEffectiveValue(int tick) {
                 foreach (var item in overrides) {

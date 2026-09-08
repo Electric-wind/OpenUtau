@@ -522,10 +522,11 @@ namespace OpenUtau.Core.Render {
                 }
                 var curveSampled = SampleCurve(curve, pitchStart, pitches.Length, convert);
                 var curveActive = SampleCurveActivity(curve, pitchStart, pitches.Length);
-                float globalOffset = track.IsHiFiUtauNoteCurve(descriptor)
+                bool isHiFiUtauCurve = track.IsHiFiUtauNoteCurve(descriptor);
+                float globalOffset = isHiFiUtauCurve
                     ? SetGlobalCurveCommand.GetGlobalOffset(part, descriptor.abbr, descriptor)
                     : 0;
-                if (Math.Abs(globalOffset) > 0.001f) {
+                if (isHiFiUtauCurve) {
                     for (int i = 0; i < curveSampled.Length; i++) {
                         curveSampled[i] = Math.Clamp(
                             curveSampled[i] + globalOffset,
