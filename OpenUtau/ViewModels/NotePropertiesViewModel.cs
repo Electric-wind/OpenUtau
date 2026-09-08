@@ -428,12 +428,12 @@ namespace OpenUtau.App.ViewModels {
             int end) {
             var curve = Part?.curves.FirstOrDefault(curve => curve.abbr == descriptor.abbr);
             if (curve != null && HasCurveInRange(descriptor.abbr, start, end)) {
-                return Math.Clamp(curve.Sample(Math.Max(start, curve.xs[0])), descriptor.min, descriptor.max);
+                return curve.Sample(Math.Max(start, curve.xs[0]));
             }
             return note.phonemeExpressions
                 .FirstOrDefault(expression => expression.abbr == descriptor.abbr && expression.index == 0)
                 is UExpression expression
-                    ? Math.Clamp(expression.value, descriptor.min, descriptor.max)
+                    ? expression.value
                     : descriptor.CustomDefaultValue;
         }
 
