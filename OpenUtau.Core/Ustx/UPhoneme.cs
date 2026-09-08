@@ -52,6 +52,35 @@ namespace OpenUtau.Core.Ustx {
             };
         }
 
+        internal static UPhoneme[] CreateRenderCopies(
+            UPhoneme[] source, UOto[] otos, UProject project, UTrack track, UVoicePart part) {
+            UPhoneme Copy(UPhoneme original, UOto oto) {
+                var copy = (UPhoneme)original.MemberwiseClone();
+                copy.oto = oto;
+                copy.phoneme = oto?.Alias ?? original.phoneme;
+                copy.phonemeMapped = copy.phoneme;
+                copy.envelope = new UEnvelope();
+                copy.Prev = null;
+                copy.Next = null;
+                return copy;
+            }
+
+            var copies = source.Select((phone, i) => Copy(phone, otos[i])).ToArray();
+            for (int i = 0; i < copies.Length; i++) {
+                copies[i].Prev = i > 0 ? copies[i - 1] :
+                    source[i].Prev == null ? null : Copy(source[i].Prev, source[i].Prev.oto);
+                copies[i].Next = i + 1 < copies.Length ? copies[i + 1] :
+                    source[i].Next == null ? null : Copy(source[i].Next, source[i].Next.oto);
+            }
+            // ValidateOverlap also updates the preceding phone's tail and envelope.
+            // Isolated copies prevent render preparation from modifying the editor's phonemes.
+            foreach (var copy in copies) {
+                copy.ValidateOverlap(project, track, part, copy.Parent);
+                copy.ValidateEnvelope(project, track, copy.Parent);
+            }
+            return copies;
+        }
+
         public void Validate(ValidateOptions options, UProject project, UTrack track, UVoicePart part, UNote note) {
             Error = note.Error;
             ValidateDuration(project, part);

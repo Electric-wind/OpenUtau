@@ -42,7 +42,7 @@ namespace OpenUtau.Core.HiFiUtau {
                 XXH64.DigestOf(File.ReadAllBytes(configPath));
         }
 
-        public float[,,] ProcessFeatureSplice(HiFiUtauPhone[] phones) {
+        public float[,,] ProcessFeatureSplice(HiFiUtauPhone[] phones, int totalModelFrames = 0) {
             // 按模型hop帧时间线拼接音素，重叠处在隐空间交叉淡化
             double ratio = Config.FeatureHop / (double)Config.ModelHop;
             var segments = new List<float[,,]>();
@@ -83,7 +83,34 @@ namespace OpenUtau.Core.HiFiUtau {
                     SliceFeat(feat, 0, overlapFeat)));
                 segments.Add(SliceFeat(feat, overlapFeat, feat.GetLength(2)));
             }
+            if (totalModelFrames > previousEndFrame) {
+                var tail = EncodeBlank(totalModelFrames - previousEndFrame, ratio);
+                if (tail != null) {
+                    segments.Add(tail);
+                }
+            }
             return ConcatFeat(segments, Config.NumMels);
+        }
+
+        internal static void BlendFeaturesInPlace(float[,,] primary, float[,,] secondary, float[] ratios) {
+            int channels = primary.GetLength(1);
+            int frames = primary.GetLength(2);
+            if (primary.GetLength(0) != 1 || secondary.GetLength(0) != 1 ||
+                secondary.GetLength(1) != channels || secondary.GetLength(2) != frames || ratios.Length != frames) {
+                throw new ArgumentException("Cross-synthesis features must share the same aligned timeline and channels.");
+            }
+            // https://github.com/yjzxkxdn/ToneBlend mixes part1 outputs linearly, then runs part2 once
+            // with a shared F0. ProcessFeatureSplice returns an owned buffer, not a cache entry.
+            for (int t = 0; t < frames; t++) {
+                float ratio = float.IsFinite(ratios[t]) ? Math.Clamp(ratios[t], 0f, 1f) : 0f;
+                if (ratio == 0) {
+                    continue;
+                }
+                for (int c = 0; c < channels; c++) {
+                    primary[0, c, t] = ratio == 1 ? secondary[0, c, t] :
+                        primary[0, c, t] * (1 - ratio) + secondary[0, c, t] * ratio;
+                }
+            }
         }
 
         public float[] Synthesize(float[,,] feat, float[] f0Input) {

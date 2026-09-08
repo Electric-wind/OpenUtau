@@ -288,7 +288,11 @@ namespace OpenUtau.Core.Render {
                         publishedUpdates = PublishRealCurveUpdates(request.part, phrase, realCurves);
                     })
                     : null;
-                bool useXsy = phrase.xsy != null && phrase.xsy.Any(x => x > 0);
+                // HiFiUTAU cross-synthesis is done natively inside the renderer
+                // (feature-domain blend); the generic double-render + FFT blend
+                // below is only for renderers without that native support.
+                bool useXsy = !(phrase.renderer is HiFiUtau.HiFiUtauRenderer) &&
+                    phrase.xsy != null && phrase.xsy.Any(x => x > 0);
                 if (!useXsy) {
                     var task = phrase.renderer.Render(phrase, progress, request.trackNo, cancellation, true, renderEvents);
                     task.Wait();

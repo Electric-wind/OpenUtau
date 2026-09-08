@@ -1934,6 +1934,16 @@ namespace OpenUtau.App.Views {
         void SetVoiceColorRemapping(UTrack track, IEnumerable<UVoicePart> parts, VoiceColorMappingViewModel vm) {
             foreach (var part in parts) {
                 foreach (var phoneme in part.phonemes) {
+                    var secondary = phoneme.GetExpression(DocManager.Inst.Project, track, Ustx.CLRY);
+                    var secondaryMapping = vm.ColorMappings.FirstOrDefault(m => m.OldIndex == (int)secondary.Item1);
+                    if (secondaryMapping != null && secondaryMapping.OldIndex != secondaryMapping.SelectedIndex) {
+                        DocManager.Inst.ExecuteCmd(new SetPhonemeExpressionCommand(
+                            DocManager.Inst.Project, track, part, phoneme, Ustx.CLRY,
+                            secondaryMapping.SelectedIndex == 0 ? null : secondaryMapping.SelectedIndex));
+                    } else if (secondaryMapping == null && secondary.Item2) {
+                        DocManager.Inst.ExecuteCmd(new SetPhonemeExpressionCommand(
+                            DocManager.Inst.Project, track, part, phoneme, Ustx.CLRY, null));
+                    }
                     var tuple = phoneme.GetExpression(DocManager.Inst.Project, track, Ustx.CLR);
                     if (vm.ColorMappings.Any(m => m.OldIndex == tuple.Item1)) {
                         var mapping = vm.ColorMappings.First(m => m.OldIndex == tuple.Item1);

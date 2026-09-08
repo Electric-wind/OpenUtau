@@ -24,6 +24,8 @@ namespace OpenUtau.Core.HiFiUtau {
             Format.Ustx.DYN,
             Format.Ustx.PITD,
             Format.Ustx.CLR,
+            Format.Ustx.CLRY,
+            Format.Ustx.XSY,
             Format.Ustx.VEL,
             Format.Ustx.VOL,
             Format.Ustx.ATK,
@@ -81,6 +83,15 @@ namespace OpenUtau.Core.HiFiUtau {
                     var model = GetModel(modelPath);
                     var phones = HiFiUtauPhone.CreateAll(phrase);
                     AlignPhoneModelFrames(phones, phrase, model.Config);
+                    HiFiUtauPhone[]? secondaryPhones = null;
+                    var controlPhones = phones;
+                    if (phrase.secondaryPhones != null && phrase.xsy != null && phrase.xsy.Any(value => value > 0)) {
+                        secondaryPhones = HiFiUtauPhone.CreateAll(phrase.secondaryPhones);
+                        AlignPhoneModelFrames(secondaryPhones, phrase, model.Config);
+                        controlPhones = phones.Select((phone, i) => phone.WithTiming(
+                            secondaryPhones[i], SampleCrossSynthesisAt(phrase, phone.PositionMs))).ToArray();
+                        AlignPhoneModelFrames(controlPhones, phrase, model.Config);
+                    }
 
                     // New cache directory structure
                     var cacheDir = Path.Join(PathManager.Inst.CachePath, "hifiutau");
@@ -109,16 +120,16 @@ namespace OpenUtau.Core.HiFiUtau {
                             result.samples = LoadCacheWave(rawWavPath);
                         }
                         if (result.samples == null) {
-                            result.samples = RenderFeaturePipeline(phones, phrase, model, cancellation.Token);
+                            result.samples = RenderFeaturePipeline(phones, secondaryPhones, phrase, model, cancellation.Token);
                             if (cancellation.IsCancellationRequested) {
                                 return result;
                             }
-                            HiFiUtauMath.ApplyPhraseEdgeEnvelope(phones, result.samples, HiFiUtauConfig.OutputSampleRate);
+                            ApplyPhraseEdges(phones, secondaryPhones, phrase, result.samples);
                             WriteCacheWave(rawWavPath, result.samples);
                         }
                         if (result.samples != null) {
                             // HN-SEP processing with caching
-                            var postCurves = PostProcessCurves.FromPhrase(phrase, phones);
+                            var postCurves = PostProcessCurves.FromPhrase(phrase, controlPhones);
                             if (postCurves.NeedsHnsep) {
                                 float[] harmonic, noise;
                                 if (File.Exists(hnsepHarmonicPath) && File.Exists(hnsepNoisePath)) {
@@ -145,7 +156,7 @@ namespace OpenUtau.Core.HiFiUtau {
                                 model.Config.ModelHop * (double)HiFiUtauConfig.OutputSampleRate / model.Config.SampleRate;
                             HiFiUtauLoudnessNormalizer.NormalizePhonesInPlace(
                                 result.samples,
-                                phones,
+                                controlPhones,
                                 HiFiUtauConfig.OutputSampleRate,
                                 samplesPerModelFrame);
                             // Overlay raw samples for direct phonemes. Runs after loudness
@@ -155,7 +166,7 @@ namespace OpenUtau.Core.HiFiUtau {
                             // Apply VOL on the waveform so its percentage remains a linear output ratio.
                             ApplyPhoneVolumes(
                                 result.samples,
-                                phones,
+                                controlPhones,
                                 model.Config.ModelHop * (double)HiFiUtauConfig.OutputSampleRate / model.Config.SampleRate);
                             Renderers.ApplyDynamics(phrase, result);
                             WriteCacheWave(finalWavPath, result.samples);
@@ -172,9 +183,10 @@ namespace OpenUtau.Core.HiFiUtau {
         static ulong ComputeRawHash(RenderPhrase phrase) {
             using var stream = new MemoryStream();
             using (var writer = new BinaryWriter(stream)) {
-                writer.Write("hifiutau-v12-hifisampler-mel-floor");
+                writer.Write("hifiutau-v14-independent-cross-synthesis-timing");
                 writer.Write(phrase.preEffectHash);
                 WriteCurve(writer, phrase.pitches);
+                WriteCurve(writer, phrase.xsy);
                 WriteCurve(writer, phrase.gender);
                 WriteCurveActivity(writer, phrase.genderCurveActive);
                 WriteCurve(writer, phrase.toneShift);
@@ -356,25 +368,91 @@ namespace OpenUtau.Core.HiFiUtau {
 
         float[] RenderFeaturePipeline(
             HiFiUtauPhone[] phones,
+            HiFiUtauPhone[]? secondaryPhones,
             RenderPhrase phrase,
             HiFiUtauModel model,
             CancellationToken cancellation) {
             var melExtractor = new HiFiUtauMelExtractor(model.Config);
+            PreparePhoneMels(phones, phrase, model.Config, melExtractor, cancellation);
+            int totalFrames = Math.Max(phones.Max(p => p.ModelEndFrame),
+                secondaryPhones?.Max(p => p.ModelEndFrame) ?? 0);
+            var feat = model.ProcessFeatureSplice(phones, totalFrames);
+            if (secondaryPhones != null) {
+                PreparePhoneMels(secondaryPhones, phrase, model.Config, melExtractor, cancellation);
+                var secondaryFeat = model.ProcessFeatureSplice(secondaryPhones, totalFrames);
+                var ratios = SampleCrossSynthesis(phrase, model.Config, feat.GetLength(2));
+                HiFiUtauModel.BlendFeaturesInPlace(feat, secondaryFeat, ratios);
+            }
+            cancellation.ThrowIfCancellationRequested();
+            var f0 = SampleF0(phrase, model.Config.ModelHop, model.Config.SampleRate);
+            return model.Synthesize(feat, f0);
+        }
+
+        void PreparePhoneMels(
+            HiFiUtauPhone[] phones,
+            RenderPhrase phrase,
+            HiFiUtauConfig config,
+            HiFiUtauMelExtractor melExtractor,
+            CancellationToken cancellation) {
             foreach (var phone in phones) {
-                if (cancellation.IsCancellationRequested) {
-                    return Array.Empty<float>();
-                }
-                phone.Mel = ExtractFeatureMel(phone, model.Config, melExtractor);
-                phone.Gender = SamplePhoneGender(phrase, phone, model.Config);
+                cancellation.ThrowIfCancellationRequested();
+                phone.Mel = ExtractFeatureMel(phone, config, melExtractor);
+                phone.Gender = SamplePhoneGender(phrase, phone, config);
                 ApplyPerPhoneControls(phone);
             }
-            MatchPhtp(phones, model.Config.MsPerFeatureFrame);
+            MatchPhtp(phones, config.MsPerFeatureFrame);
             foreach (var phone in phones) {
                 ApplyPhoneEnvelope(phone);
             }
-            var f0 = SampleF0(phrase, model.Config.ModelHop, model.Config.SampleRate);
-            var feat = model.ProcessFeatureSplice(phones);
-            return model.Synthesize(feat, f0);
+        }
+
+        static float[] SampleCrossSynthesis(RenderPhrase phrase, HiFiUtauConfig config, int frames) {
+            var ratios = new float[frames];
+            if (phrase.xsy == null || phrase.xsy.Length == 0) {
+                return ratios;
+            }
+            double startMs = phrase.positionMs - phrase.leadingMs;
+            double msPerFrame = config.MsPerModelFrame / config.FeatUpsample;
+            for (int i = 0; i < frames; i++) {
+                ratios[i] = SampleCrossSynthesisAt(phrase, startMs + i * msPerFrame);
+            }
+            return ratios;
+        }
+
+        static float SampleCrossSynthesisAt(RenderPhrase phrase, double positionMs) {
+            double tick = phrase.timeAxis.MsPosToNonExactTickPos(positionMs);
+            double index = Math.Clamp(
+                (tick - (phrase.position - phrase.leading)) / UCurve.interval,
+                0, phrase.xsy.Length - 1);
+            int left = (int)index;
+            int right = Math.Min(left + 1, phrase.xsy.Length - 1);
+            float value = phrase.xsy[left] + (phrase.xsy[right] - phrase.xsy[left]) * (float)(index - left);
+            return float.IsFinite(value) ? Math.Clamp(value / 100f, 0f, 1f) : 0f;
+        }
+
+        static void ApplyPhraseEdges(HiFiUtauPhone[] phones, HiFiUtauPhone[]? secondaryPhones,
+            RenderPhrase phrase, float[] samples) {
+            double startMs = phrase.positionMs - phrase.leadingMs;
+            const int sampleRate = HiFiUtauConfig.OutputSampleRate;
+            if (secondaryPhones == null) {
+                HiFiUtauMath.ApplyPhraseEdgeEnvelope(phones, samples, sampleRate,
+                    phrase.secondaryPhones == null ? null : startMs);
+                return;
+            }
+            var primaryEnvelope = new float[samples.Length];
+            var secondaryEnvelope = new float[samples.Length];
+            Array.Fill(primaryEnvelope, 1f);
+            Array.Fill(secondaryEnvelope, 1f);
+            HiFiUtauMath.ApplyPhraseEdgeEnvelope(phones, primaryEnvelope, sampleRate, startMs);
+            HiFiUtauMath.ApplyPhraseEdgeEnvelope(secondaryPhones, secondaryEnvelope, sampleRate, startMs);
+            for (int i = 0; i < samples.Length; i++) {
+                float gain = primaryEnvelope[i];
+                if (gain != secondaryEnvelope[i]) {
+                    float ratio = SampleCrossSynthesisAt(phrase, startMs + i * 1000.0 / sampleRate);
+                    gain += (secondaryEnvelope[i] - gain) * ratio;
+                }
+                samples[i] *= gain;
+            }
         }
 
         float[,] ExtractFeatureMel(HiFiUtauPhone phone, HiFiUtauConfig config, HiFiUtauMelExtractor melExtractor) {

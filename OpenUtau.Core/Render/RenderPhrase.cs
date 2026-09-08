@@ -66,7 +66,6 @@ namespace OpenUtau.Core.Render {
         public readonly double adjustedTempo;
         public readonly Tuple<string, int?, string>[] flags;// flag, value, abbr. Abbr is kept here for flag filtering.
         public readonly string suffix;
-        public readonly string suffix2; // only set when the part has an xsy curve
         public readonly float volume;
         public readonly float velocity;
         public readonly float modulation;
@@ -84,7 +83,7 @@ namespace OpenUtau.Core.Render {
         public readonly UOto oto2;
         public readonly ulong hash;
 
-        internal RenderPhone(UProject project, UTrack track, UVoicePart part, UNote note, UPhoneme phoneme, int phrasePosition, bool xsyAvailable) {
+        internal RenderPhone(UProject project, UTrack track, UVoicePart part, UNote note, UPhoneme phoneme, int phrasePosition, bool xsyAvailable = false) {
             position = part.position + phoneme.position - phrasePosition;
             duration = phoneme.Duration;
             end = position + duration;
@@ -126,11 +125,6 @@ namespace OpenUtau.Core.Render {
             string voiceColor = phoneme.GetVoiceColor(project, track);
             suffix = track.Singer.Subbanks.FirstOrDefault(
                 subbank => subbank.Color == voiceColor)?.Suffix ?? string.Empty;
-            string targetColor = xsyAvailable ? phoneme.GetVoiceColor2(project, track) : null;
-            if (!string.IsNullOrEmpty(targetColor)) {
-                suffix2 = track.Singer.Subbanks.FirstOrDefault(
-                    subbank => subbank.Color == targetColor)?.Suffix ?? string.Empty;
-            }
             volume = phoneme.GetExpression(project, track, Format.Ustx.VOL).Item1 * 0.01f;
             velocity = phoneme.GetExpression(project, track, Format.Ustx.VEL).Item1 * 0.01f;
             modulation = phoneme.GetExpression(project, track, Format.Ustx.MOD).Item1 * 0.01f;
@@ -144,9 +138,11 @@ namespace OpenUtau.Core.Render {
             toneShift = (int)phoneme.GetExpression(project, track, Format.Ustx.SHFT).Item1;
 
             oto = phoneme.oto;
-            if (oto != null && !string.IsNullOrEmpty(targetColor)) {
+            string targetColor = xsyAvailable ? phoneme.GetVoiceColor2(project, track) : null;
+            if (oto != null && targetColor != null) {
                 string basePhoneme = oto.Phonetic ?? phoneme.phoneme;
-                if (track.Singer.TryGetMappedOto(basePhoneme, note.tone, targetColor, out var secondaryOto)) {
+                if (track.Singer.TryGetMappedOto(basePhoneme, note.tone, targetColor, out var secondaryOto) &&
+                    secondaryOto.IsColorMatch(targetColor)) {
                     oto2 = secondaryOto;
                 }
             }
@@ -168,8 +164,15 @@ namespace OpenUtau.Core.Render {
                         }
                     }
                     writer.Write(suffix);
-                    if (suffix2 != null) {
-                        writer.Write(suffix2);
+                    if (oto2 != null) {
+                        writer.Write(oto2.File ?? string.Empty);
+                        writer.Write(oto2.Alias ?? string.Empty);
+                        writer.Write(oto2.Offset);
+                        writer.Write(oto2.Consonant);
+                        writer.Write(oto2.Cutoff);
+                        writer.Write(oto2.Preutter);
+                        writer.Write(oto2.Overlap);
+                        writer.Write(File.Exists(oto2.File) ? File.GetLastWriteTimeUtc(oto2.File).Ticks : 0L);
                     }
                     writer.Write(volume);
                     writer.Write(velocity);
@@ -206,6 +209,7 @@ namespace OpenUtau.Core.Render {
 
         public readonly RenderNote[] notes;
         public readonly RenderPhone[] phones;
+        public readonly RenderPhone[]? secondaryPhones;
 
         public readonly float[] pitches;
         public readonly float[] pitchesBeforeDeviation;
@@ -283,19 +287,38 @@ namespace OpenUtau.Core.Render {
             notes = uNotes
                 .Select(n => new RenderNote(project, part, n, position))
                 .ToArray();
-            // xsy (cross synthesis) work is skipped entirely unless the part
-            // actually carries an xsy curve, so default renders pay nothing.
-            bool xsyAvailable = part.curves.Any(c => c.abbr == Format.Ustx.XSY);
+            // Cross synthesis. HiFiUTAU renders it natively inside the renderer
+            // (feature-domain blend of a secondary phoneme pass), so for it the
+            // gate also covers global values and note-level XSY expressions.
+            // Every other renderer uses the generic RenderEngine path, which
+            // only has something to work with when the part carries an xsy curve.
+            bool xsyAvailable = renderer is HiFiUtau.HiFiUtauRenderer
+                ? part.curves.Any(c => c.abbr == Format.Ustx.XSY) ||
+                    part.hifiUtauGlobalValues?.ContainsKey(Format.Ustx.XSY) == true ||
+                    phonemes.Any(p => p.GetExpression(project, track, Format.Ustx.XSY).Item1 > 0)
+                : part.curves.Any(c => c.abbr == Format.Ustx.XSY);
             phones = phonemes
                 .Select(p => new RenderPhone(project, track, part, p.Parent, p, position, xsyAvailable))
                 .ToArray();
 
-            leading = phones.First().leading;
+            // Secondary copies are only consumed by the HiFi renderer's native
+            // cross-synthesis; the generic path swaps oto2 in at render time via
+            // reflection instead, so skip building them for other renderers.
+            if (xsyAvailable && renderer is HiFiUtau.HiFiUtauRenderer) {
+                var secondaryOtos = phones.Select(p => !p.direct && p.oto2 != null && File.Exists(p.oto2.File)
+                    ? p.oto2 : p.oto).ToArray();
+                if (secondaryOtos.Where((oto, i) => oto != phones[i].oto).Any()) {
+                    secondaryPhones = UPhoneme.CreateRenderCopies(phonemes.ToArray(), secondaryOtos, project, track, part)
+                        .Select(p => new RenderPhone(project, track, part, p.Parent, p, position))
+                        .ToArray();
+                }
+            }
+            leading = Math.Max(phones.First().leading, secondaryPhones?.First().leading ?? 0);
 
             positionMs = phones.First().positionMs;
             endMs = phones.Last().endMs;
             durationMs = endMs - positionMs;
-            leadingMs = phones.First().leadingMs;
+            leadingMs = Math.Max(phones.First().leadingMs, secondaryPhones?.First().leadingMs ?? 0);
 
             const int pitchInterval = 5;
             int pitchStart = position - part.position - leading;
@@ -534,11 +557,17 @@ namespace OpenUtau.Core.Render {
                         break;
                     case Format.Ustx.XSY:
                         xsy = curveSampled;
-                        foreach (var phone in phones) {
-                            int startIdx = Math.Max(0, (phone.position - phone.leading - pitchStart) / pitchInterval);
-                            int endIdx = Math.Min(xsy.Length, Math.Max(0, (phone.position - pitchStart) / pitchInterval));
-                            for (int k = startIdx; k < endIdx; k++) {
-                                xsy[k] = 0f;
+                        // The generic (non-HiFi) path blends two independently
+                        // rendered waveforms, so each preutter is kept on its own
+                        // color to avoid doubling consonants. HiFiUTAU blends in
+                        // feature space and needs the full curve across the phrase.
+                        if (!(renderer is HiFiUtau.HiFiUtauRenderer)) {
+                            foreach (var phone in phones) {
+                                int startIdx = Math.Max(0, (phone.position - phone.leading - pitchStart) / pitchInterval);
+                                int endIdx = Math.Min(xsy.Length, Math.Max(0, (phone.position - pitchStart) / pitchInterval));
+                                for (int k = startIdx; k < endIdx; k++) {
+                                    xsy[k] = 0f;
+                                }
                             }
                         }
                         break;
@@ -640,6 +669,11 @@ namespace OpenUtau.Core.Render {
                     writer.Write(timeAxis.Timestamp);
                     foreach (var phone in phones) {
                         writer.Write(phone.hash);
+                    }
+                    if (secondaryPhones != null) {
+                        foreach (var phone in secondaryPhones) {
+                            writer.Write(phone.hash);
+                        }
                     }
                     if (postEffect) {
                         foreach (var array in new float[][] { pitches, dynamics, gender, breathiness, toneShift, tension, voicing, xsy }) {

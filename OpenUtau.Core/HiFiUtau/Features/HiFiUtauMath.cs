@@ -300,26 +300,35 @@ namespace OpenUtau.Core.HiFiUtau {
             return result;
         }
 
-        public static void ApplyPhraseEdgeEnvelope(HiFiUtauPhone[] phones, float[] samples, int sampleRate) {
+        public static void ApplyPhraseEdgeEnvelope(HiFiUtauPhone[] phones, float[] samples, int sampleRate,
+            double? phraseStartMs = null) {
             if (samples.Length == 0 || phones.Length == 0) {
                 return;
             }
             // Fade-in: linear 0 → 1.0 across p0.X to p1.X
             var first = phones[0].Envelope;
+            int start = phraseStartMs.HasValue
+                ? ClampSample(phones[0].PositionMs + first[0].X - phraseStartMs.Value, sampleRate, samples.Length)
+                : 0;
+            int end = phraseStartMs.HasValue
+                ? ClampSample(phones[^1].PositionMs + phones[^1].Envelope[4].X - phraseStartMs.Value, sampleRate, samples.Length)
+                : samples.Length;
+            Array.Clear(samples, 0, start);
+            Array.Clear(samples, end, samples.Length - end);
             int fadeIn = Math.Max(0, (int)Math.Round((first[1].X - first[0].X) * sampleRate / 1000.0));
-            fadeIn = Math.Min(fadeIn, samples.Length);
+            fadeIn = Math.Min(fadeIn, samples.Length - start);
             if (fadeIn > 1) {
                 for (int i = 0; i < fadeIn; i++) {
-                    samples[i] *= (float)i / (fadeIn - 1);
+                    samples[start + i] *= (float)i / (fadeIn - 1);
                 }
             }
             // Fade-out: linear 1.0 → 0 across p3.X to p4.X
             var last = phones[^1].Envelope;
             int fadeOut = Math.Max(0, (int)Math.Round((last[4].X - last[3].X) * sampleRate / 1000.0));
-            fadeOut = Math.Min(fadeOut, samples.Length);
+            fadeOut = Math.Min(fadeOut, end);
             if (fadeOut > 1) {
                 for (int i = 0; i < fadeOut; i++) {
-                    samples[samples.Length - fadeOut + i] *= (float)(fadeOut - 1 - i) / (fadeOut - 1);
+                    samples[end - fadeOut + i] *= (float)(fadeOut - 1 - i) / (fadeOut - 1);
                 }
             }
         }
