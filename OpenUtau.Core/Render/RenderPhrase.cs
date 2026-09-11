@@ -741,7 +741,8 @@ namespace OpenUtau.Core.Render {
 
         public void DeleteCacheFiles() {
             foreach (var filename in cacheFiles) {
-                var files = Directory.EnumerateFiles(PathManager.Inst.CachePath, $"{filename}*");
+                var files = Directory.EnumerateFiles(
+                    PathManager.Inst.CachePath, $"{filename}*", SearchOption.AllDirectories);
                 foreach (var file in files) {
                     try {
                         File.Delete(file);
