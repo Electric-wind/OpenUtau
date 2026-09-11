@@ -99,8 +99,13 @@ namespace OpenUtau.App.Controls {
                             // sampleData is already empty, so the screen draws a perfect flat line.
                         }
                         else if (OpenUtau.Core.PlaybackManager.Inst.StartingToPlay || part.Mix == null) {
-                            foreach (var cacheItem in PlaybackManager.Inst.LiveWaveformCache.Values) {
-                                if (cacheItem.trackNo != part.trackNo) continue;
+                            // Only mix current phrases; cached revisions would add their
+                            // amplitudes together while the part is being re-rendered.
+                            foreach (var phrase in part.renderPhrases) {
+                                if (!PlaybackManager.Inst.LiveWaveformCache.TryGetValue(phrase.hash.ToString(), out var cacheItem) ||
+                                    cacheItem.trackNo != part.trackNo) {
+                                    continue;
+                                }
                                 
                                 double phraseStartMs = cacheItem.posMs;
                                 float[] phraseSamples = cacheItem.samples;
