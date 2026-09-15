@@ -296,8 +296,13 @@ namespace OpenUtau.Api {
 
         public string GetParentVoiceColor() {
             if (project != null && track != null) {
-                if (track.TryGetExpDescriptor(project, Core.Format.Ustx.CLR, out var trackCLR)) {
-                    return track.VoiceColorExp.options[(int)trackCLR.CustomDefaultValue];
+                if (track.TryGetExpDescriptor(project, Core.Format.Ustx.CLR, out var trackCLR)
+                    && track.VoiceColorExp != null
+                    && track.VoiceColorExp.options != null) {
+                    int index = (int)trackCLR.CustomDefaultValue;
+                    if (index >= 0 && index < track.VoiceColorExp.options.Length) {
+                        return track.VoiceColorExp.options[index];
+                    }
                 }
             }
             return string.Empty;

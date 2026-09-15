@@ -56,7 +56,12 @@ namespace OpenUtau.Classic {
             if (Loaded) {
                 return;
             }
-            Reload();
+            lock (SessionLock) {
+                if (Loaded) {
+                    return;
+                }
+                Reload();
+            }
         }
 
         public override void Reload() {
@@ -65,10 +70,12 @@ namespace OpenUtau.Classic {
             }
             try {
                 voicebank.Reload();
-                Load();
-                loaded = true;
-                if (otoWatcher == null) {
-                    otoWatcher = new OtoWatcher(this, Location);
+                lock (SessionLock) {
+                    Load();
+                    loaded = true;
+                    if (otoWatcher == null) {
+                        otoWatcher = new OtoWatcher(this, Location);
+                    }
                 }
                 OtoDirty = false;
             } catch (Exception e) {
@@ -138,9 +145,11 @@ namespace OpenUtau.Classic {
                 }
             }
 
+            // Snapshot under lock: the background task runs after SessionLock is
+            // released, when FreeMemory() may already be clearing otoMap.
+            var searchSnapshot = otoMap.Values.ToList();
             Task.Run(() => {
-                otoMap.Values
-                    .ToList()
+                searchSnapshot
                     .ForEach(oto => {
                         oto.SearchTerms.Add(oto.Alias.ToLowerInvariant().Replace(" ", ""));
                         try {
@@ -176,30 +185,39 @@ namespace OpenUtau.Classic {
                 otos.Clear();
                 otoMap.Clear();
                 errors.Clear();
+                // Mark as unloaded so the next EnsureLoaded() reloads the tables
+                // instead of treating the freed singer as ready.
+                loaded = false;
             }
         }
 
         public override bool TryGetOto(string phoneme, out UOto oto) {
-            if (otoMap.TryGetValue(phoneme, out oto)) {
-                return true;
+            lock (SessionLock) {
+                if (otoMap.TryGetValue(phoneme, out oto)) {
+                    return true;
+                }
             }
             return false;
         }
 
         public override bool TryGetMappedOto(string phoneme, int tone, out UOto oto) {
             oto = default;
-            var subbank = subbanks.Find(subbank => string.IsNullOrEmpty(subbank.Color) && subbank.toneSet.Contains(tone));
-            if (subbank != null && otoMap.TryGetValue($"{subbank.Prefix}{phoneme}{subbank.Suffix}", out oto)) {
-                return true;
+            lock (SessionLock) {
+                var subbank = subbanks.Find(subbank => string.IsNullOrEmpty(subbank.Color) && subbank.toneSet.Contains(tone));
+                if (subbank != null && otoMap.TryGetValue($"{subbank.Prefix}{phoneme}{subbank.Suffix}", out oto)) {
+                    return true;
+                }
             }
             return TryGetOto(phoneme, out oto);
         }
 
         public override bool TryGetMappedOto(string phoneme, int tone, string color, out UOto oto) {
             oto = default;
-            var subbank = subbanks.Find(subbank => subbank.Color == color && subbank.toneSet.Contains(tone));
-            if (subbank != null && otoMap.TryGetValue($"{subbank.Prefix}{phoneme}{subbank.Suffix}", out oto)) {
-                return true;
+            lock (SessionLock) {
+                var subbank = subbanks.Find(subbank => subbank.Color == color && subbank.toneSet.Contains(tone));
+                if (subbank != null && otoMap.TryGetValue($"{subbank.Prefix}{phoneme}{subbank.Suffix}", out oto)) {
+                    return true;
+                }
             }
             return TryGetMappedOto(phoneme, tone, out oto);
         }
@@ -209,7 +227,11 @@ namespace OpenUtau.Classic {
                 text = text.ToLowerInvariant().Replace(" ", "");
             }
             bool all = string.IsNullOrEmpty(text);
-            var filtered = otoMap.Values
+            List<UOto> snapshot;
+            lock (SessionLock) {
+                snapshot = otoMap.Values.ToList();
+            }
+            var filtered = snapshot
                 .Where(oto => all || oto.SearchTerms.Exists(term => term.Contains(text)))
                 .ToList();
 

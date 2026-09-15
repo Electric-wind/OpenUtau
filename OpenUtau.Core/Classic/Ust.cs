@@ -4,10 +4,13 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text;
+using OpenUtau.Api;
 using OpenUtau.Classic.Flags;
 using OpenUtau.Core;
 using OpenUtau.Core.Format;
 using OpenUtau.Core.Ustx;
+using OpenUtau.Core.Util;
+using Serilog;
 using SharpCompress;
 
 namespace OpenUtau.Classic {
@@ -152,6 +155,36 @@ namespace OpenUtau.Classic {
             }
         }
 
+        // Mirror TrackHeaderViewModel.ApplySingerToTrack's singer->phonemizer
+        // linkage (saved preference, then singer default). The UI path goes
+        // through undo commands, but UST import builds the project before it
+        // reaches DocManager, so plain assignment is used here. Renderer
+        // linkage is left to URenderSettings.Validate during project Validate.
+        private static void ApplySingerToTrack(UTrack track, USinger singer) {
+            track.Singer = singer;
+            if (singer == null || !singer.Found) {
+                return;
+            }
+            string phonemizerName = null;
+            if (!string.IsNullOrEmpty(singer.Id) &&
+                Preferences.Default.SingerPhonemizers.TryGetValue(singer.Id, out var saved)) {
+                phonemizerName = saved;
+            } else if (!string.IsNullOrEmpty(singer.DefaultPhonemizer)) {
+                phonemizerName = singer.DefaultPhonemizer;
+            }
+            if (string.IsNullOrEmpty(phonemizerName)) {
+                return;
+            }
+            try {
+                var phonemizer = PhonemizerFactory.Get(phonemizerName)?.Create();
+                if (phonemizer != null) {
+                    track.Phonemizer = phonemizer;
+                }
+            } catch (Exception e) {
+                Log.Error(e, $"Failed to load phonemizer {phonemizerName}");
+            }
+        }
+
         private static void ParseSetting(UProject project, List<IniLine> lines) {
             const string format = "<param>=<value>";
             foreach (var iniLine in lines) {
@@ -176,7 +209,7 @@ namespace OpenUtau.Classic {
                         if (singer == null) {
                             singer = USinger.CreateMissing(Path.GetFileName(singerpath.Replace("%DATA%", "").Replace("%VOICE%", "")));
                         }
-                        project.tracks[0].Singer = singer;
+                        ApplySingerToTrack(project.tracks[0], singer);
                         break;
                     case "Tool2":
                         tool2 = parts[1].Trim();
