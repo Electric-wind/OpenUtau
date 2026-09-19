@@ -44,6 +44,7 @@ namespace OpenUtau.Core.HiFiUtau {
             "breh",
             "bric",
             "gwlc",
+            "dstc",
         };
 
         public USingerType SingerType => USingerType.Classic;
@@ -104,7 +105,7 @@ namespace OpenUtau.Core.HiFiUtau {
 
                     var rawHash = ComputeRawHash(phrase);
                     var rawWavPath = Path.Join(rawDir, $"{model.Hash:x16}-{rawHash:x16}.wav");
-                    var finalWavPath = Path.Join(finalDir, $"{model.Hash:x16}-{rawHash:x16}-{phrase.hash:x16}-classic-direct-v1.wav");
+                    var finalWavPath = Path.Join(finalDir, $"{model.Hash:x16}-{rawHash:x16}-{phrase.hash:x16}-classic-direct-v2-hg-growl.wav");
                     var hnsepHarmonicPath = Path.Join(hnsepDir, $"harmonic-{model.Hash:x16}-{rawHash:x16}.wav");
                     var hnsepNoisePath = Path.Join(hnsepDir, $"noise-{model.Hash:x16}-{rawHash:x16}.wav");
                     phrase.AddCacheFile(finalWavPath);
@@ -149,8 +150,11 @@ namespace OpenUtau.Core.HiFiUtau {
                                     postCurves.Breathiness, postCurves.Tension, postCurves.Voicing);
                             }
                             if (postCurves.NeedsGrowl) {
+                                AudioPostProcessor.ApplyGrowl(result.samples, postCurves.Growl, AudioPostProcessingDsp.SampleRate);
+                            }
+                            if (postCurves.NeedsDistortion) {
                                 var pitchHzCurve = AudioPostProcessingDsp.PitchHzCurve(phrase, result.samples.Length);
-                                AudioPostProcessor.ApplyGrowl(result.samples, postCurves.Growl, AudioPostProcessingDsp.SampleRate, pitchHzCurve);
+                                AudioPostProcessor.ApplyDistortion(result.samples, postCurves.Distortion, AudioPostProcessingDsp.SampleRate, pitchHzCurve);
                             }
                             double samplesPerModelFrame =
                                 model.Config.ModelHop * (double)HiFiUtauConfig.OutputSampleRate / model.Config.SampleRate;
@@ -747,6 +751,16 @@ namespace OpenUtau.Core.HiFiUtau {
                     isFlag = false,
                     skipOutputIfDefault = true,
                 },
+                new UExpressionDescriptor {
+                    name = "distortion (curve)",
+                    abbr = "dstc",
+                    type = UExpressionType.Curve,
+                    min = 0,
+                    max = 100,
+                    defaultValue = 0,
+                    isFlag = false,
+                    skipOutputIfDefault = true,
+                },
             };
         }
 
@@ -761,8 +775,10 @@ namespace OpenUtau.Core.HiFiUtau {
                 float[]? breh,
                 float[]? bri,
                 float[]? growl,
+                float[]? distortion,
                 bool needsHnsep,
-                bool needsGrowl) {
+                bool needsGrowl,
+                bool needsDistortion) {
                 Breathiness = breathiness;
                 Tension = tension;
                 Voicing = voicing;
@@ -770,8 +786,10 @@ namespace OpenUtau.Core.HiFiUtau {
                 Breh = breh;
                 Bri = bri;
                 Growl = growl;
+                Distortion = distortion;
                 NeedsHnsep = needsHnsep;
                 NeedsGrowl = needsGrowl;
+                NeedsDistortion = needsDistortion;
             }
 
             public readonly float[]? Breathiness;
@@ -781,8 +799,10 @@ namespace OpenUtau.Core.HiFiUtau {
             public readonly float[]? Breh;
             public readonly float[]? Bri;
             public readonly float[]? Growl;
+            public readonly float[]? Distortion;
             public readonly bool NeedsHnsep;
             public readonly bool NeedsGrowl;
+            public readonly bool NeedsDistortion;
 
             public static PostProcessCurves FromPhrase(RenderPhrase phrase, HiFiUtauPhone[] phones) {
                 var breathiness = MergePhoneValues(
@@ -798,6 +818,7 @@ namespace OpenUtau.Core.HiFiUtau {
                 var breh = GetCurve(phrase, "breh");
                 var bri = GetCurve(phrase, "bric");
                 var growl = GetCurve(phrase, "gwlc");
+                var distortion = GetCurve(phrase, "dstc");
                 bool needsHnsep =
                     AudioPostProcessor.HasNonDefaultCurve(breathiness, 0, 0.5f) ||
                     AudioPostProcessor.HasNonDefaultCurve(tension, 0, 0.5f) ||
@@ -806,7 +827,9 @@ namespace OpenUtau.Core.HiFiUtau {
                     AudioPostProcessor.HasNonDefaultCurve(breh, 0, 0.5f) ||
                     AudioPostProcessor.HasNonDefaultCurve(bri, 0, 0.5f);
                 bool needsGrowl = AudioPostProcessor.HasNonDefaultCurve(growl, 0, 0.5f);
-                return new PostProcessCurves(breathiness, tension, voicing, brel, breh, bri, growl, needsHnsep, needsGrowl);
+                bool needsDistortion = AudioPostProcessor.HasNonDefaultCurve(distortion, 0, 0.5f);
+                return new PostProcessCurves(breathiness, tension, voicing, brel, breh, bri, growl, distortion,
+                    needsHnsep, needsGrowl, needsDistortion);
             }
 
             static float[]? MergePhoneValues(
