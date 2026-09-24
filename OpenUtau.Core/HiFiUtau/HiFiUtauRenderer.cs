@@ -115,7 +115,7 @@ namespace OpenUtau.Core.HiFiUtau {
                     var rawHash = ComputeRawHash(phrase, phones, secondaryPhones, controlPhones);
                     var finalHash = ComputeFinalHash(rawHash, controlPhones, postCurves);
                     var rawWavPath = Path.Join(rawDir, $"{model.Hash:x16}-{rawHash:x16}.wav");
-                    var finalWavPath = Path.Join(finalDir, $"{model.Hash:x16}-{rawHash:x16}-{finalHash:x16}-staged-v1.wav");
+                    var finalWavPath = Path.Join(finalDir, $"{model.Hash:x16}-{rawHash:x16}-{finalHash:x16}-staged-v2-float32.wav");
                     var hnsepHarmonicPath = Path.Join(hnsepDir, $"harmonic-{model.Hash:x16}-{rawHash:x16}.wav");
                     var hnsepNoisePath = Path.Join(hnsepDir, $"noise-{model.Hash:x16}-{rawHash:x16}.wav");
                     phrase.AddCacheFile(finalWavPath);
@@ -208,7 +208,7 @@ namespace OpenUtau.Core.HiFiUtau {
             HiFiUtauPhone[]? secondaryPhones, HiFiUtauPhone[] controlPhones) {
             using var stream = new MemoryStream();
             using (var writer = new BinaryWriter(stream)) {
-                writer.Write("hifiutau-v15-staged-raw-xsy-distortion");
+                writer.Write("hifiutau-v16-staged-raw-xsy-distortion-float32");
                 writer.Write(phrase.singer.Id);
                 writer.Write(phrase.timeAxis.Timestamp);
                 writer.Write(phrase.position);
