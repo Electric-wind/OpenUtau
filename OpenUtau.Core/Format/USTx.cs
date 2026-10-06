@@ -36,6 +36,7 @@ namespace OpenUtau.Core.Format {
         public const string VOIC = "voic";
         public const string CLRY = "clry";
         public const string XSY = "xsy";
+        public const string GRWC = "grwc";
 
         public static readonly string[] required = { DYN, PITD, CLR, ENG, VEL, VOL, ATK, DEC };
 
@@ -64,6 +65,7 @@ namespace OpenUtau.Core.Format {
             project.RegisterExpression(new UExpressionDescriptor("voicing (curve)", VOIC, 0, 100, 100) { type = UExpressionType.Curve });
             project.RegisterExpression(new UExpressionDescriptor("voice color y", CLRY, false, new string[0]));
             project.RegisterExpression(new UExpressionDescriptor("cross synthesis (curve)", XSY, 0, 100, 0) { type = UExpressionType.Curve });
+            project.RegisterExpression(new UExpressionDescriptor("growl (curve)", GRWC, 0, 100, 0) { type = UExpressionType.Curve });
 
             string message = string.Empty;
             if (ValidateExpression(project, "g", GEN)) {
