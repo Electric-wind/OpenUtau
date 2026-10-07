@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Numerics;
+using OpenUtau.Classic.Hifisampler;
 using OpenUtau.Core.Format;
 using OpenUtau.Core.Render;
 
@@ -45,73 +46,9 @@ namespace OpenUtau.Core.HiFiUtau {
             }
 
             var growlValues = AudioPostProcessingDsp.ResampleCurve(growlCurve, samples.Length, 0f);
-            // Match Hifisampler HG: 80 Hz square-wave pitch modulation, up to 100 cents,
-            // on a fourth-order Butterworth high-pass band above 400 Hz.
-            var band = Array.ConvertAll(samples, sample => (double)sample);
-            double cutoff = Math.Clamp(400.0 / (sampleRate / 2.0), 0.01, 0.99) * sampleRate / 2.0;
-            ApplyGrowlHighPass(band, sampleRate, cutoff, 1.0 / (2.0 * Math.Cos(Math.PI / 8.0)));
-            ApplyGrowlHighPass(band, sampleRate, cutoff, 1.0 / (2.0 * Math.Cos(3.0 * Math.PI / 8.0)));
-
-            var drift = new double[samples.Length];
-            double ratioSum = 0;
-            for (int i = 0; i < samples.Length; i++) {
-                double lfo = (i * 80.0 / sampleRate) % 1.0 < 0.5 ? 1.0 : -1.0;
-                double cents = lfo * Math.Clamp(growlValues[i], 0f, 100f);
-                drift[i] = Math.Pow(2.0, cents / 1200.0);
-                ratioSum += drift[i];
-            }
-            double meanRatio = ratioSum / samples.Length;
-            double firstRatio = drift[0];
-            double cumulativeRatio = 0;
-            for (int i = 0; i < samples.Length; i++) {
-                cumulativeRatio += drift[i];
-                drift[i] = cumulativeRatio - firstRatio - i * meanRatio;
-            }
-            // Remove slow time drift without changing the phrase duration or mean pitch.
-            if (samples.Length > 100) {
-                ApplyGrowlHighPass(drift, sampleRate, 20.0, 1.0 / Math.Sqrt(2.0));
-            }
-
-            var modulated = new double[samples.Length];
-            double originalEnergy = 0;
-            double modulatedEnergy = 0;
-            for (int i = 0; i < samples.Length; i++) {
-                double index = Math.Clamp(i + drift[i], 0.0, samples.Length - 1.0);
-                int left = (int)index;
-                int right = Math.Min(left + 1, samples.Length - 1);
-                modulated[i] = band[left] + (band[right] - band[left]) * (index - left);
-                originalEnergy += band[i] * band[i];
-                modulatedEnergy += modulated[i] * modulated[i];
-            }
-            double gain = Math.Sqrt(modulatedEnergy / samples.Length) > 1e-10
-                ? Math.Sqrt(originalEnergy / modulatedEnergy)
-                : 1.0;
-            for (int i = 0; i < samples.Length; i++) {
-                // A zero curve value bypasses even the drift filter's remaining tail.
-                if (growlValues[i] > 0) {
-                    samples[i] = (float)(samples[i] - band[i] + modulated[i] * gain);
-                }
-            }
-        }
-
-        static void ApplyGrowlHighPass(double[] samples, int sampleRate, double cutoff, double q) {
-            double omega = 2.0 * Math.PI * cutoff / sampleRate;
-            double cos = Math.Cos(omega);
-            double alpha = Math.Sin(omega) / (2.0 * q);
-            double a0 = 1.0 + alpha;
-            double b0 = (1.0 + cos) / (2.0 * a0);
-            double b1 = -2.0 * b0;
-            double a1 = -2.0 * cos / a0;
-            double a2 = (1.0 - alpha) / a0;
-            double z1 = 0;
-            double z2 = 0;
-            for (int i = 0; i < samples.Length; i++) {
-                double input = samples[i];
-                double output = b0 * input + z1;
-                z1 = b1 * input - a1 * output + z2;
-                z2 = b0 * input - a2 * output;
-                samples[i] = output;
-            }
+            var processed = HifiGrowl.Apply(samples, sampleRate, 80.0,
+                i => Math.Clamp(growlValues[i], 0f, 100f) / 100.0);
+            Array.Copy(processed, samples, samples.Length);
         }
 
         public static void ApplyDistortion(float[] samples, float[]? distortionCurve, int sampleRate, float[]? pitchHzCurve = null) {
