@@ -156,15 +156,7 @@ namespace OpenUtau.Core.HiFiUtau {
                                 var pitchHzCurve = AudioPostProcessingDsp.PitchHzCurve(phrase, result.samples.Length);
                                 AudioPostProcessor.ApplyDistortion(result.samples, postCurves.Distortion, AudioPostProcessingDsp.SampleRate, pitchHzCurve);
                             }
-                            double samplesPerModelFrame =
-                                model.Config.ModelHop * (double)HiFiUtauConfig.OutputSampleRate / model.Config.SampleRate;
-                            HiFiUtauLoudnessNormalizer.NormalizePhonesInPlace(
-                                result.samples,
-                                controlPhones,
-                                HiFiUtauConfig.OutputSampleRate,
-                                samplesPerModelFrame);
-                            // Overlay raw samples for direct phonemes. Runs after loudness
-                            // normalization (so the raw recording is not re-leveled) and before
+                            // Overlay raw samples for direct phonemes after synthesis and before
                             // ApplyPhoneVolumes (so the VOL expression also scales the direct audio).
                             ApplyDirectPhones(result.samples, phones, phrase, HiFiUtauConfig.OutputSampleRate);
                             // Apply VOL on the waveform so its percentage remains a linear output ratio.
@@ -194,7 +186,7 @@ namespace OpenUtau.Core.HiFiUtau {
         static ulong ComputeRawHash(RenderPhrase phrase) {
             using var stream = new MemoryStream();
             using (var writer = new BinaryWriter(stream)) {
-                writer.Write("hifiutau-v14-independent-cross-synthesis-timing");
+                writer.Write("hifiutau-v15-worldline-r11-source-auto-gain");
                 writer.Write(phrase.preEffectHash);
                 WriteCurve(writer, phrase.pitches);
                 WriteCurve(writer, phrase.xsy);
@@ -384,12 +376,13 @@ namespace OpenUtau.Core.HiFiUtau {
             HiFiUtauModel model,
             CancellationToken cancellation) {
             var melExtractor = new HiFiUtauMelExtractor(model.Config);
-            PreparePhoneMels(phones, phrase, model.Config, melExtractor, cancellation);
+            var normalizer = new HiFiUtauLoudnessNormalizer();
+            PreparePhoneMels(phones, phrase, model.Config, melExtractor, normalizer, cancellation);
             int totalFrames = Math.Max(phones.Max(p => p.ModelEndFrame),
                 secondaryPhones?.Max(p => p.ModelEndFrame) ?? 0);
             var feat = model.ProcessFeatureSplice(phones, totalFrames);
             if (secondaryPhones != null) {
-                PreparePhoneMels(secondaryPhones, phrase, model.Config, melExtractor, cancellation);
+                PreparePhoneMels(secondaryPhones, phrase, model.Config, melExtractor, normalizer, cancellation);
                 var secondaryFeat = model.ProcessFeatureSplice(secondaryPhones, totalFrames);
                 var ratios = SampleCrossSynthesis(phrase, model.Config, feat.GetLength(2));
                 HiFiUtauModel.BlendFeaturesInPlace(feat, secondaryFeat, ratios);
@@ -404,10 +397,11 @@ namespace OpenUtau.Core.HiFiUtau {
             RenderPhrase phrase,
             HiFiUtauConfig config,
             HiFiUtauMelExtractor melExtractor,
+            HiFiUtauLoudnessNormalizer normalizer,
             CancellationToken cancellation) {
             foreach (var phone in phones) {
                 cancellation.ThrowIfCancellationRequested();
-                phone.Mel = ExtractFeatureMel(phone, config, melExtractor);
+                phone.Mel = ExtractFeatureMel(phone, config, melExtractor, normalizer);
                 phone.Gender = SamplePhoneGender(phrase, phone, config);
                 ApplyPerPhoneControls(phone);
             }
@@ -466,7 +460,8 @@ namespace OpenUtau.Core.HiFiUtau {
             }
         }
 
-        float[,] ExtractFeatureMel(HiFiUtauPhone phone, HiFiUtauConfig config, HiFiUtauMelExtractor melExtractor) {
+        float[,] ExtractFeatureMel(HiFiUtauPhone phone, HiFiUtauConfig config,
+                HiFiUtauMelExtractor melExtractor, HiFiUtauLoudnessNormalizer normalizer) {
             var audio = HiFiUtauMath.ReadMonoSamples(phone.AudioPath, config.SampleRate);
             double totalLenMs = audio.Length * 1000.0 / config.SampleRate;
             int startSample = HiFiUtauMath.ClampSample(phone.OffsetMs, config.SampleRate, audio.Length);
@@ -500,6 +495,8 @@ namespace OpenUtau.Core.HiFiUtau {
             if (nFrames == 0) {
                 return new float[config.NumMels, 0];
             }
+
+            normalizer.NormalizeMelInPlace(melFull, audio, phone, startSample, endSample, config.SampleRate);
 
             int conSamples = Math.Max(0, consonantSample - startSample);
             int conFramesOrig = conSamples > 0 ? Math.Min(nFrames, Math.Max(1, (conSamples - config.FeatureHop) / config.FeatureHop + 1)) : 0;
