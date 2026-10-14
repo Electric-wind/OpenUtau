@@ -11,6 +11,7 @@ namespace OpenUtau.Core.Render {
         public const string CLASSIC = "CLASSIC";
         public const string WORLDLINE_R = "WORLDLINE-R";
         public const string WORLDLINE_R2 = "WORLDLINE-R2";
+        public const string WORLDLINE_R11 = "WORLDLINE-R1.1";
         public const string ENUNU = "ENUNU";
         public const string VOGEN = "VOGEN";
         public const string DIFFSINGER = "DIFFSINGER";
@@ -18,7 +19,7 @@ namespace OpenUtau.Core.Render {
         public const string HIFIUTAU = "HIFIUTAU";
         public const string HIFIUTAU_DEFAULT_MODEL = "hifiutau-pc-nsf-hifigan";
 
-        static readonly string[] classicRenderers = new[] { WORLDLINE_R, CLASSIC, HIFIUTAU };
+        static readonly string[] classicRenderers = new[] { WORLDLINE_R, WORLDLINE_R11, CLASSIC, HIFIUTAU };
         static readonly string[] enunuRenderers = new[] { ENUNU };
         static readonly string[] vogenRenderers = new[] { VOGEN };
         static readonly string[] diffSingerRenderers = new[] { DIFFSINGER };
@@ -43,31 +44,39 @@ namespace OpenUtau.Core.Render {
         }
 
         public static List<string> getRendererOptions() {
-            return new List<string> {
-                "WORLDLINE-R",
-                "Classic",
-                "HiFiUTAU"
-            };
+            return classicRenderers.ToList();
         }
 
         public static string GetDefaultRenderer(USingerType singerType) {
             if (singerType == USingerType.Classic) {
-                return Preferences.Default.DefaultRenderer switch {
+                string preferred = Preferences.Default.DefaultRenderer switch {
                     "Classic" => CLASSIC,
                     "HiFiUTAU" => HIFIUTAU,
-                    _ => GetSupportedRenderers(singerType)[0],
+                    var value => value,
                 };
+                if (classicRenderers.Contains(preferred)) {
+                    return preferred;
+                }
             }
             return GetSupportedRenderers(singerType)[0];
         }
+
+        /// <summary>
+        /// <see cref="IRenderer.ExpressionGraphSlot"/> of a renderer id; an unknown id is its own slot.
+        /// </summary>
+        public static string GetExpressionGraphSlot(string renderer) =>
+            GetOrCreate(renderer)?.ExpressionGraphSlot ?? renderer;
 
         public static IRenderer CreateRenderer(string renderer) {
             if (renderer == CLASSIC) {
                 return new ClassicRenderer();
             } else if (renderer == WORLDLINE_R2) {
-                return new WorldlineRenderer(version: 2);
+                return new WorldlineRenderer(version: 20);
+            } else if (renderer == WORLDLINE_R11) {
+                // Before the prefix match below, which maps any WORLDLINE-* to R1.
+                return new WorldlineRenderer(version: 11);
             } else if (renderer?.StartsWith(WORLDLINE_R.Substring(0, 9)) ?? false) {
-                return new WorldlineRenderer(version: 1);
+                return new WorldlineRenderer(version: 10);
             } else if (renderer == ENUNU) {
                 return new Enunu.EnunuRenderer();
             } else if (renderer == VOGEN) {
@@ -80,6 +89,17 @@ namespace OpenUtau.Core.Render {
                 return new HiFiUtau.HiFiUtauRenderer();
             }
             return null;
+        }
+
+        // One instance per renderer id. Renderers are stateless or globally
+        // serialized (the static lockObj fields), so sharing an instance across
+        // tracks is behaviourally identical to today while an undo/redo that
+        // toggles the renderer no longer re-creates the pipeline object.
+        static readonly ConcurrentDictionary<string, IRenderer> rendererCache =
+            new ConcurrentDictionary<string, IRenderer>();
+
+        public static IRenderer GetOrCreate(string renderer) {
+            return rendererCache.GetOrAdd(renderer ?? string.Empty, CreateRenderer);
         }
 
         readonly static ConcurrentDictionary<string, object> cacheLockMap

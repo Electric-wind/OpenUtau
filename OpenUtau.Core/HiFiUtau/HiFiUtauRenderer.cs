@@ -10,7 +10,6 @@ using NAudio.Wave.SampleProviders;
 using OpenUtau.Classic;
 using OpenUtau.Core.Format;
 using OpenUtau.Core.Render;
-using OpenUtau.Core.SignalChain;
 using OpenUtau.Core.Ustx;
 using OpenUtau.Core.Util;
 
@@ -177,13 +176,6 @@ namespace OpenUtau.Core.HiFiUtau {
                         }
                     }
                     progress.Complete(phrase.phones.Length, progressInfo);
-                    if (result.samples != null) {
-                        PlaybackManager.Inst.LiveWaveformCache[phrase.hash.ToString()] = (
-                            trackNo, phrase.positionMs - phrase.leadingMs, result.samples, DateTime.Now);
-                        Task.Factory.StartNew(() => {
-                            DocManager.Inst.ExecuteCmd(new WaveformReadyNotification());
-                        }, CancellationToken.None, TaskCreationOptions.None, DocManager.Inst.MainScheduler);
-                    }
                     return result;
                 } catch (OperationCanceledException) when (cancellation.IsCancellationRequested) {
                     return result;
@@ -367,9 +359,7 @@ namespace OpenUtau.Core.HiFiUtau {
         }
 
         static void WriteCacheWave(string path, float[] samples) {
-            var source = new WaveSource(0, 0, 0, 1);
-            source.SetSamples(samples);
-            WaveFileWriter.CreateWaveFile16(path, new ExportAdapter(source).ToMono(1, 0));
+            Wave.WriteMono16Wav(path, samples);
         }
 
         static float[] LoadCacheWave(string path) {

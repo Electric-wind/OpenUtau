@@ -45,6 +45,7 @@ namespace OpenUtau.Plugin.Builtin {
         protected override string[] GetVowels() => vowels;
         protected override string[] GetConsonants() => consonants;
         protected override string GetDictionaryName() => "";
+        protected override bool EnablePhonemeTokenization => true;
 
         // For banks with missing vowels
         private readonly Dictionary<string, string> missingVphonemes = "ax=ah,aa=ah,ae=ah,iy=ih,uh=uw,ix=ih,ux=uh,oh=ao,eu=uh,oe=ax,uy=uw,yw=uw,yx=iy,wx=uw,ea=eh,ia=iy,oa=ao,ua=uw,R=-,N=n,mm=m,ll=l".Split(',')
@@ -1414,12 +1415,12 @@ namespace OpenUtau.Plugin.Builtin {
         };
 
         private readonly Dictionary<string, string[]> vcConsonantFallbacks = new Dictionary<string, string[]> {
-            { "b", new[] { "p", "d", "v" } },
+            { "b", new[] { "p", "d" } },
             { "ch", new[] { "t", "k", "q", "p", "g" } },
             { "d", new[] { "p", "b", "g" } },
             { "dh", new[] { "d", "v"} },
             { "dx", new[] { "d", "t", "r" } },
-            { "f", new[] { "s", "p", "th" } },
+            { "f", new[] { "s", "th" } },
             { "g", new[] { "k", "p", "b" } },
             { "hh", new[] { "f", "th" } },
             { "jh", new[] { "d", "b", "g" } },
@@ -1444,11 +1445,11 @@ namespace OpenUtau.Plugin.Builtin {
 
         // CC FALLBACKS
         private readonly Dictionary<string, string[]> ccConsonant1Fallbacks = new Dictionary<string, string[]> {
-            { "b", new[] { "p", "d", "v" } },
+            { "b", new[] { "p", "d" } },
             { "d", new[] { "p", "b", "g" } },
             { "dh", new[] { "d", "v"} },
             { "dx", new[] { "d", "t", "r" } },
-            { "f", new[] { "s", "p", "th" } },
+            { "f", new[] { "s", "th" } },
             { "g", new[] { "k", "p", "b" } },
             { "hh", new[] { "f", "th" } },
             { "k", new[] { "g", "d", "t" } },
@@ -1471,7 +1472,7 @@ namespace OpenUtau.Plugin.Builtin {
         };
 
         private readonly Dictionary<string, string[]> ccConsonant2Fallbacks = new Dictionary<string, string[]> {
-            { "b", new[] { "p", "d", "v" } },
+            { "b", new[] { "p", "d" } },
             { "ch", new[] { "sh", "jh"} },
             { "d", new[] { "p", "d", "v" } },
             { "dh", new[] { "d", "v"} },
