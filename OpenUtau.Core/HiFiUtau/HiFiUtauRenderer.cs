@@ -35,6 +35,7 @@ namespace OpenUtau.Core.HiFiUtau {
             Format.Ustx.BREC,
             Format.Ustx.TENC,
             Format.Ustx.VOIC,
+            Format.Ustx.GRWC,
             Format.Ustx.NORM,
             Format.Ustx.DIR,
             "phtp",
@@ -42,7 +43,6 @@ namespace OpenUtau.Core.HiFiUtau {
             "brel",
             "breh",
             "bric",
-            "gwlc",
             "dstc",
         };
 
@@ -193,7 +193,7 @@ namespace OpenUtau.Core.HiFiUtau {
                 WriteCurve(writer, phrase.gender);
                 WriteCurveActivity(writer, phrase.genderCurveActive);
                 WriteCurve(writer, phrase.toneShift);
-                WriteCurve(writer, GetCurve(phrase, "gwlc"));
+                WriteCurve(writer, GetCurve(phrase, Format.Ustx.GRWC));
                 foreach (var phone in phrase.phones) {
                     writer.Write(phone.gender);
                     writer.Write(phone.toneShift);
@@ -732,16 +732,6 @@ namespace OpenUtau.Core.HiFiUtau {
                     skipOutputIfDefault = true,
                 },
                 new UExpressionDescriptor {
-                    name = "growl (curve)",
-                    abbr = "gwlc",
-                    type = UExpressionType.Curve,
-                    min = 0,
-                    max = 100,
-                    defaultValue = 0,
-                    isFlag = false,
-                    skipOutputIfDefault = true,
-                },
-                new UExpressionDescriptor {
                     name = "distortion (curve)",
                     abbr = "dstc",
                     type = UExpressionType.Curve,
@@ -807,7 +797,7 @@ namespace OpenUtau.Core.HiFiUtau {
                 var brel = GetCurve(phrase, "brel");
                 var breh = GetCurve(phrase, "breh");
                 var bri = GetCurve(phrase, "bric");
-                var growl = GetCurve(phrase, "gwlc");
+                var growl = GetCurve(phrase, Format.Ustx.GRWC);
                 var distortion = GetCurve(phrase, "dstc");
                 bool needsHnsep =
                     AudioPostProcessor.HasNonDefaultCurve(breathiness, 0, 0.5f) ||
